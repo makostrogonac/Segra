@@ -35,6 +35,15 @@ jobs:
           "VERSION=$version" >> $env:GITHUB_ENV
           "TAG=v$version" >> $env:GITHUB_ENV
 
+      - name: Update Frontend version
+        working-directory: ./Frontend
+        shell: pwsh
+        run: |
+          $packageJson = Get-Content package.json -Raw | ConvertFrom-Json
+          $packageJson.version = $env:VERSION
+          $packageJson | ConvertTo-Json -Depth 100 | Set-Content package.json -NoNewline
+          Write-Host "Updated frontend version to $env:VERSION"
+
       - name: Build frontend
         shell: pwsh
         run: |
