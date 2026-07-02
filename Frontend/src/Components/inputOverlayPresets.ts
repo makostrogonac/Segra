@@ -1,5 +1,7 @@
 // ponytail: input overlay layout presets + per-user prefs (localStorage). Capture is always-on
 // in the backend; the editor overlay appearance (style/position/size/opacity/layout) lives here.
+// Built-in layouts are based on standard streamer/mechanical-keyboard form factors (NohBoard-style
+// full, 60% ANSI / Wooting, TKL, FPS cluster, numpad).
 
 export interface OverlayKey {
   vk: number;
@@ -79,6 +81,17 @@ export const VK_GROUPS: { group: string; items: VkOption[] }[] = [
       { vk: 27, label: 'Esc' },
       { vk: 8, label: 'Bksp' },
       { vk: 46, label: 'Del' },
+      { vk: 192, label: '`' },
+      { vk: 189, label: '-' },
+      { vk: 187, label: '=' },
+      { vk: 219, label: '[' },
+      { vk: 221, label: ']' },
+      { vk: 220, label: '\\' },
+      { vk: 186, label: ';' },
+      { vk: 222, label: "'" },
+      { vk: 188, label: ',' },
+      { vk: 190, label: '.' },
+      { vk: 191, label: '/' },
     ],
   },
   {
@@ -90,41 +103,178 @@ export const VK_GROUPS: { group: string; items: VkOption[] }[] = [
       { vk: 40, label: '↓' },
     ],
   },
+  {
+    group: 'Numpad',
+    items: [
+      { vk: 144, label: 'Num' },
+      { vk: 111, label: '/' },
+      { vk: 106, label: '*' },
+      { vk: 109, label: '-' },
+      { vk: 107, label: '+' },
+      { vk: 13, label: '↵' },
+      { vk: 96, label: '0' },
+      { vk: 110, label: '.' },
+      { vk: 97, label: '1' },
+      { vk: 98, label: '2' },
+      { vk: 99, label: '3' },
+      { vk: 100, label: '4' },
+      { vk: 101, label: '5' },
+      { vk: 102, label: '6' },
+      { vk: 103, label: '7' },
+      { vk: 104, label: '8' },
+      { vk: 105, label: '9' },
+    ],
+  },
 ];
 
-const UNIT = 36;
+export const UNIT = 36;
 const GAP = 4;
-const WIDE = 52;
 
 interface RowKey {
   code: number;
   label: string;
-  wide?: boolean;
+  /** Width in key units (1 = UNIT). Real ANSI proportions: 1.25/1.5/1.75/2/2.25/2.75/6.25. */
+  span?: number;
 }
 
-// Build a preset from rows of keys (left-to-right), placing the mouse to the right of the keyboard.
-function fromRows(rows: RowKey[][]): OverlayPreset {
+function keyWidth(span = 1): number {
+  return span * UNIT + (span - 1) * GAP;
+}
+
+// Lay out a block of rows starting at (originX, originY). Returns the keys and the block width.
+function layoutBlock(
+  rows: RowKey[][],
+  originX: number,
+  originY: number,
+): { keys: OverlayKey[]; width: number } {
   const keys: OverlayKey[] = [];
-  let maxX = 0;
+  let width = 0;
   rows.forEach((row, ry) => {
-    let x = GAP;
+    let x = originX;
     row.forEach((k) => {
-      const w = k.wide ? WIDE : UNIT;
-      keys.push({ vk: k.code, label: k.label, x, y: GAP + ry * (UNIT + GAP), w, h: UNIT });
+      const w = keyWidth(k.span);
+      keys.push({ vk: k.code, label: k.label, x, y: originY + ry * (UNIT + GAP), w, h: UNIT });
       x += w + GAP;
     });
-    maxX = Math.max(maxX, x);
+    width = Math.max(width, x - originX);
   });
-  const mouse: OverlayMouse = {
-    x: maxX + GAP,
-    y: GAP,
-    w: UNIT + 8,
-    h: UNIT * 3 + GAP * 2,
-    showMovement: true,
-  };
+  return { keys, width: Math.max(0, width - GAP) };
+}
+
+// Build a preset from rows, placing the mouse (optional) to the right of the keyboard.
+function fromRows(rows: RowKey[][], withMouse = true): OverlayPreset {
+  const { keys, width } = layoutBlock(rows, GAP, GAP);
+  const mouse: OverlayMouse | null = withMouse
+    ? {
+        x: GAP + width + GAP,
+        y: GAP,
+        w: UNIT + 10,
+        h: UNIT * 3 + GAP * 2,
+        showMovement: true,
+      }
+    : null;
   return { keys, mouse };
 }
 
+// --- 60% ANSI (Wooting-style, 61 keys) ---
+const SIXTY_ROWS: RowKey[][] = [
+  [
+    { code: 192, label: '`' },
+    { code: 49, label: '1' },
+    { code: 50, label: '2' },
+    { code: 51, label: '3' },
+    { code: 52, label: '4' },
+    { code: 53, label: '5' },
+    { code: 54, label: '6' },
+    { code: 55, label: '7' },
+    { code: 56, label: '8' },
+    { code: 57, label: '9' },
+    { code: 48, label: '0' },
+    { code: 189, label: '-' },
+    { code: 187, label: '=' },
+    { code: 8, label: 'Bksp', span: 2 },
+  ],
+  [
+    { code: 9, label: 'Tab', span: 1.5 },
+    { code: 81, label: 'Q' },
+    { code: 87, label: 'W' },
+    { code: 69, label: 'E' },
+    { code: 82, label: 'R' },
+    { code: 84, label: 'T' },
+    { code: 89, label: 'Y' },
+    { code: 85, label: 'U' },
+    { code: 73, label: 'I' },
+    { code: 79, label: 'O' },
+    { code: 80, label: 'P' },
+    { code: 219, label: '[' },
+    { code: 221, label: ']' },
+    { code: 220, label: '\\', span: 1.5 },
+  ],
+  [
+    { code: 20, label: 'Caps', span: 1.75 },
+    { code: 65, label: 'A' },
+    { code: 83, label: 'S' },
+    { code: 68, label: 'D' },
+    { code: 70, label: 'F' },
+    { code: 71, label: 'G' },
+    { code: 72, label: 'H' },
+    { code: 74, label: 'J' },
+    { code: 75, label: 'K' },
+    { code: 76, label: 'L' },
+    { code: 186, label: ';' },
+    { code: 222, label: "'" },
+    { code: 13, label: 'Enter', span: 2.25 },
+  ],
+  [
+    { code: 16, label: 'Shift', span: 2.25 },
+    { code: 90, label: 'Z' },
+    { code: 88, label: 'X' },
+    { code: 67, label: 'C' },
+    { code: 86, label: 'V' },
+    { code: 66, label: 'B' },
+    { code: 78, label: 'N' },
+    { code: 77, label: 'M' },
+    { code: 188, label: ',' },
+    { code: 190, label: '.' },
+    { code: 191, label: '/' },
+    { code: 16, label: 'Shift', span: 2.75 },
+  ],
+  [
+    { code: 17, label: 'Ctrl', span: 1.25 },
+    { code: 91, label: 'Win', span: 1.25 },
+    { code: 18, label: 'Alt', span: 1.25 },
+    { code: 32, label: 'Space', span: 6.25 },
+    { code: 18, label: 'Alt', span: 1.25 },
+    { code: 255, label: 'Fn', span: 1.25 },
+    { code: 17, label: 'Ctrl', span: 1.25 },
+  ],
+];
+
+// --- TKL: function row + 60% block + arrow cluster ---
+function buildTkl(): OverlayPreset {
+  const fRow: RowKey[] = [
+    { code: 27, label: 'Esc' },
+    ...Array.from({ length: 12 }, (_, i) => ({ code: 112 + i, label: `F${i + 1}` })),
+  ];
+  const fBlock = layoutBlock([fRow], GAP, GAP);
+  const mainBlock = layoutBlock(SIXTY_ROWS, GAP, GAP + (UNIT + GAP) * 1);
+  const blockWidth = Math.max(fBlock.width, mainBlock.width);
+
+  // Arrow cluster at the bottom-right of the main block.
+  const ax = GAP + blockWidth - (3 * UNIT + 2 * GAP);
+  const ay = GAP + (UNIT + GAP) * 4; // aligns with the 5th row (Shift row) area, below it
+  const arrows: OverlayKey[] = [
+    { vk: 38, label: '↑', x: ax + UNIT + GAP, y: ay, w: UNIT, h: UNIT },
+    { vk: 37, label: '←', x: ax, y: ay + UNIT + GAP, w: UNIT, h: UNIT },
+    { vk: 40, label: '↓', x: ax + UNIT + GAP, y: ay + UNIT + GAP, w: UNIT, h: UNIT },
+    { vk: 39, label: '→', x: ax + 2 * (UNIT + GAP), y: ay + UNIT + GAP, w: UNIT, h: UNIT },
+  ];
+
+  const keys = [...fBlock.keys, ...mainBlock.keys, ...arrows];
+  return { keys, mouse: null };
+}
+
+// --- Compact gaming (5-row) ---
 const COMPACT_ROWS: RowKey[][] = [
   [
     { code: 27, label: 'Esc' },
@@ -136,97 +286,77 @@ const COMPACT_ROWS: RowKey[][] = [
     { code: 54, label: '6' },
   ],
   [
-    { code: 9, label: 'Tab', wide: true },
+    { code: 9, label: 'Tab', span: 1.5 },
     { code: 81, label: 'Q' },
     { code: 87, label: 'W' },
     { code: 69, label: 'E' },
     { code: 82, label: 'R' },
   ],
   [
-    { code: 20, label: 'Caps', wide: true },
+    { code: 20, label: 'Caps', span: 1.75 },
     { code: 65, label: 'A' },
     { code: 83, label: 'S' },
     { code: 68, label: 'D' },
     { code: 70, label: 'F' },
   ],
   [
-    { code: 16, label: 'Shift', wide: true },
+    { code: 16, label: 'Shift', span: 2.25 },
     { code: 90, label: 'Z' },
     { code: 88, label: 'X' },
     { code: 67, label: 'C' },
     { code: 86, label: 'V' },
   ],
   [
-    { code: 17, label: 'Ctrl', wide: true },
-    { code: 18, label: 'Alt', wide: true },
-    { code: 32, label: 'Space', wide: true },
+    { code: 17, label: 'Ctrl', span: 1.25 },
+    { code: 18, label: 'Alt', span: 1.25 },
+    { code: 32, label: 'Space', span: 3 },
   ],
 ];
 
+// --- WASD movement cluster ---
 const WASD_ROWS: RowKey[][] = [
+  [{ code: 87, label: 'W' }],
   [
-    { code: 87, label: 'W' },
     { code: 65, label: 'A' },
     { code: 83, label: 'S' },
     { code: 68, label: 'D' },
   ],
   [
-    { code: 16, label: 'Shift', wide: true },
-    { code: 32, label: 'Space', wide: true },
+    { code: 16, label: 'Shift', span: 1.5 },
+    { code: 32, label: 'Space', span: 2 },
   ],
 ];
 
-const FULL_ROWS: RowKey[][] = [
+// --- FPS cluster: movement + actions + mouse ---
+const FPS_ROWS: RowKey[][] = [
   [
     { code: 27, label: 'Esc' },
     { code: 49, label: '1' },
     { code: 50, label: '2' },
     { code: 51, label: '3' },
     { code: 52, label: '4' },
-    { code: 53, label: '5' },
-    { code: 54, label: '6' },
-    { code: 55, label: '7' },
-    { code: 56, label: '8' },
-    { code: 57, label: '9' },
-    { code: 48, label: '0' },
   ],
   [
-    { code: 9, label: 'Tab', wide: true },
+    { code: 9, label: 'Tab', span: 1.5 },
     { code: 81, label: 'Q' },
     { code: 87, label: 'W' },
     { code: 69, label: 'E' },
     { code: 82, label: 'R' },
-    { code: 84, label: 'T' },
-    { code: 89, label: 'Y' },
-    { code: 85, label: 'U' },
   ],
   [
-    { code: 20, label: 'Caps', wide: true },
+    { code: 16, label: 'Shift', span: 1.5 },
     { code: 65, label: 'A' },
     { code: 83, label: 'S' },
     { code: 68, label: 'D' },
     { code: 70, label: 'F' },
-    { code: 71, label: 'G' },
-    { code: 72, label: 'H' },
-    { code: 74, label: 'J' },
   ],
   [
-    { code: 16, label: 'Shift', wide: true },
-    { code: 90, label: 'Z' },
-    { code: 88, label: 'X' },
-    { code: 67, label: 'C' },
-    { code: 86, label: 'V' },
-    { code: 66, label: 'B' },
-    { code: 78, label: 'N' },
-    { code: 77, label: 'M' },
-  ],
-  [
-    { code: 17, label: 'Ctrl', wide: true },
-    { code: 18, label: 'Alt', wide: true },
-    { code: 32, label: 'Space', wide: true },
+    { code: 17, label: 'Ctrl', span: 1.5 },
+    { code: 32, label: 'Space', span: 2 },
   ],
 ];
 
+// --- Arrow cluster ---
 const ARROW_ROWS: RowKey[][] = [
   [{ code: 38, label: '↑' }],
   [
@@ -236,16 +366,53 @@ const ARROW_ROWS: RowKey[][] = [
   ],
 ];
 
+// --- Numpad ---
+const NUMPAD_ROWS: RowKey[][] = [
+  [
+    { code: 144, label: 'Num' },
+    { code: 111, label: '/' },
+    { code: 106, label: '*' },
+    { code: 109, label: '-' },
+  ],
+  [
+    { code: 103, label: '7' },
+    { code: 104, label: '8' },
+    { code: 105, label: '9' },
+    { code: 107, label: '+' },
+  ],
+  [
+    { code: 100, label: '4' },
+    { code: 101, label: '5' },
+    { code: 102, label: '6' },
+  ],
+  [
+    { code: 97, label: '1' },
+    { code: 98, label: '2' },
+    { code: 99, label: '3' },
+    { code: 13, label: '↵' },
+  ],
+  [
+    { code: 96, label: '0', span: 2 },
+    { code: 110, label: '.' },
+  ],
+];
+
 export const COMPACT = fromRows(COMPACT_ROWS);
 export const WASD = fromRows(WASD_ROWS);
-export const FULL = fromRows(FULL_ROWS);
-export const ARROWS = fromRows(ARROW_ROWS);
+export const SIXTY = fromRows(SIXTY_ROWS);
+export const TKL = buildTkl();
+export const FPS = fromRows(FPS_ROWS);
+export const ARROWS = fromRows(ARROW_ROWS, false);
+export const NUMPAD = fromRows(NUMPAD_ROWS, false);
 
 export const BUILTIN_PRESETS: { name: string; preset: OverlayPreset }[] = [
+  { name: '60%', preset: SIXTY },
   { name: 'Compact', preset: COMPACT },
+  { name: 'FPS', preset: FPS },
   { name: 'WASD', preset: WASD },
-  { name: 'Full', preset: FULL },
+  { name: 'TKL', preset: TKL },
   { name: 'Arrows', preset: ARROWS },
+  { name: 'Numpad', preset: NUMPAD },
 ];
 
 export const DEFAULT_PREFS: InputOverlayPrefs = {
@@ -254,7 +421,7 @@ export const DEFAULT_PREFS: InputOverlayPrefs = {
   position: 'BottomLeft',
   scale: 1,
   opacity: 1,
-  preset: COMPACT,
+  preset: SIXTY,
 };
 
 const PREFS_KEY = 'segra.inputOverlay.v1';
@@ -271,13 +438,13 @@ export function loadPrefs(): InputOverlayPrefs {
       return {
         ...DEFAULT_PREFS,
         ...parsed,
-        preset: parsed.preset ? normalizePreset(parsed.preset) : COMPACT,
+        preset: parsed.preset ? normalizePreset(parsed.preset) : SIXTY,
       };
     }
   } catch {
     // ignore corrupt prefs
   }
-  return { ...DEFAULT_PREFS, preset: clonePreset(COMPACT) };
+  return { ...DEFAULT_PREFS, preset: clonePreset(SIXTY) };
 }
 
 export function savePrefs(p: InputOverlayPrefs): void {

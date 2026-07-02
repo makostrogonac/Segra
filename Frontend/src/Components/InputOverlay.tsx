@@ -336,12 +336,23 @@ function KeyDiv({
 }) {
   return (
     <div
-      className={`flex items-center justify-center rounded border text-[10px] font-semibold leading-none ${
-        pressed
-          ? 'bg-yellow-400 text-black border-yellow-300'
-          : 'bg-black/60 text-white/80 border-white/20'
+      className={`flex items-center justify-center rounded-[5px] text-[10px] font-bold leading-none ${
+        pressed ? 'text-black' : 'text-white/70'
       }`}
-      style={{ position: 'absolute', left: k.x, top: k.y, width: k.w, height: k.h }}
+      style={{
+        position: 'absolute',
+        left: k.x,
+        top: k.y,
+        width: k.w,
+        height: k.h,
+        background: pressed
+          ? 'linear-gradient(180deg, #fde047 0%, #f59e0b 100%)'
+          : 'linear-gradient(180deg, rgba(40,42,54,0.85) 0%, rgba(20,21,30,0.9) 100%)',
+        border: pressed ? '1px solid #fcd34d' : '1px solid rgba(255,255,255,0.10)',
+        boxShadow: pressed
+          ? '0 0 8px 1px rgba(251,191,36,0.7), inset 0 1px 0 rgba(255,255,255,0.4)'
+          : 'inset 0 1px 0 rgba(255,255,255,0.06)',
+      }}
     >
       {k.label}
     </div>
@@ -442,26 +453,35 @@ function KeyboardMouse({
             height: preset.mouse.h,
           }}
         >
-          <div className="flex h-full w-full">
+          <div className="relative h-full w-full overflow-hidden rounded-[10px] border border-white/10 bg-gradient-to-b from-[#28242e]/90 to-[#15121a]/95">
             <div
-              className={`flex-1 rounded-l-lg border ${
-                mb & 1 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
-              }`}
+              className="absolute left-0 top-0 h-[55%] w-1/2 rounded-tl-[10px]"
+              style={{
+                background: mb & 1 ? 'linear-gradient(180deg,#fde047,#f59e0b)' : 'transparent',
+              }}
             />
-            <div className="flex w-2 flex-col items-center justify-center">
-              <div
-                className={`h-4 w-1.5 rounded-full ${wheel !== 0 ? 'bg-yellow-400' : 'bg-white/30'}`}
-              />
-            </div>
             <div
-              className={`flex-1 rounded-r-lg border ${
-                mb & 2 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
-              }`}
+              className="absolute right-0 top-0 h-[55%] w-1/2 rounded-tr-[10px]"
+              style={{
+                background: mb & 2 ? 'linear-gradient(180deg,#fde047,#f59e0b)' : 'transparent',
+              }}
+            />
+            <div className="absolute left-1/2 top-0 h-[55%] w-px -translate-x-1/2 bg-white/15" />
+            <div
+              className="absolute left-1/2 top-[16%] h-3 w-1.5 -translate-x-1/2 rounded-full"
+              style={{
+                background: wheel !== 0 || mb & 4 ? '#fde047' : 'rgba(255,255,255,0.25)',
+              }}
+            />
+            <div
+              className="absolute -left-[3px] top-[28%] h-2 w-1.5 rounded-l-sm"
+              style={{ background: mb & 8 ? '#fde047' : 'rgba(255,255,255,0.18)' }}
+            />
+            <div
+              className="absolute -left-[3px] top-[44%] h-2 w-1.5 rounded-l-sm"
+              style={{ background: mb & 16 ? '#fde047' : 'rgba(255,255,255,0.18)' }}
             />
           </div>
-          {(mb & 4) > 0 && (
-            <div className="absolute left-1/2 top-1 h-2 w-2 -translate-x-1/2 rounded-full bg-yellow-400" />
-          )}
           {preset.mouse.showMovement && (
             <MouseMovement samples={samples} idx={idx} w={preset.mouse.w} h={preset.mouse.h} />
           )}
