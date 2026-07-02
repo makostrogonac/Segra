@@ -47,6 +47,7 @@ jobs:
           $ErrorActionPreference = 'Continue'
           gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
           $releaseExists = $LASTEXITCODE -eq 0
+          $global:LASTEXITCODE = 0
           $ErrorActionPreference = 'Stop'
           if ($releaseExists) {
             "SKIP_RELEASE=true" >> $env:GITHUB_ENV
