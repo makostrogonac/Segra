@@ -47,6 +47,10 @@ namespace Segra.Backend.Recorder
         private const string InputOverlayVersion = "5.0.6";
         private const string InputOverlayPluginUrl = "https://github.com/univrsal/input-overlay/releases/download/5.0.6/input-overlay-5.0.6-windows-x64.zip";
         private const string InputOverlayPresetsUrl = "https://github.com/univrsal/input-overlay/releases/download/5.0.6/input-overlay-5.0.6-presets.zip";
+        // input-overlay 5.0.6 is an OBS Studio plugin and hard-imports Qt6Core/Gui/Widgets +
+        // obs-frontend-api.dll, which Segra's headless (ObsKit.NET) OBS does not ship. These four
+        // DLLs were extracted from OBS Studio 32.1.2 and bundled so the plugin can load.
+        private const string InputOverlayDepsUrl = "https://github.com/makostrogonac/Segra/releases/download/input-overlay-deps-5.0.6/input-overlay-deps-5.0.6.zip";
 
         [GeneratedRegex(@"BufferDesc\.Width:\s*(\d+)")]
         private static partial Regex BufferDescWidthRegex();
@@ -2897,6 +2901,12 @@ namespace Segra.Backend.Recorder
             // return so already-extracted installs get fixed too.
             EnsureInputOverlaySdl2(currentDirectory);
 
+            // The Qt6/frontend deps are only needed when the overlay is enabled, so skip the ~9MB
+            // download for everyone else. Runs before the early return so an install that already has
+            // the plugin+presets still gets the deps added when the user enables the overlay.
+            if (Settings.Instance.InputOverlayEnabled)
+                await EnsureInputOverlayQtAndFrontendAsync(currentDirectory);
+
             if (File.Exists(pluginPath) && File.Exists(presetCheckPath))
                 return;
 
@@ -2949,6 +2959,31 @@ namespace Segra.Backend.Recorder
             catch (Exception ex)
             {
                 Log.Warning($"Could not copy SDL2.dll for input-overlay: {ex.Message}");
+            }
+        }
+
+        private static async Task EnsureInputOverlayQtAndFrontendAsync(string currentDirectory)
+        {
+            // ponytail: pulls 4 DLLs from a ~9MB zip; if the Qt ABI skews after a plugin bump, delete
+            // the root Qt6*/obs-frontend-api DLLs to force a refresh.
+            string[] deps = { "Qt6Core.dll", "Qt6Gui.dll", "Qt6Widgets.dll", "obs-frontend-api.dll" };
+            if (deps.All(d => File.Exists(Path.Combine(currentDirectory, d))))
+                return;
+
+            try
+            {
+                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "Segra");
+                string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra");
+                Directory.CreateDirectory(appDataDir);
+                string depsZip = Path.Combine(appDataDir, "input-overlay-deps-5.0.6.zip");
+                await DownloadFileAsync(httpClient, InputOverlayDepsUrl, depsZip);
+                ZipFile.ExtractToDirectory(depsZip, currentDirectory, true);
+                Log.Information("Installed Input Overlay Qt6/frontend dependencies");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Input Overlay dependency install failed; the plugin will not load: {ex.Message}");
             }
         }
 
