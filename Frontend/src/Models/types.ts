@@ -4,6 +4,10 @@ export type RecordingMode = 'Session' | 'Buffer' | 'Hybrid';
 
 export type DisplayCaptureMethod = 'Auto' | 'DXGI' | 'WGC';
 
+export type InputOverlayStyle = 'KeyboardMouse' | 'XboxController' | 'PlayStationController';
+
+export type InputOverlayPosition = 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
+
 export type AudioOutputMode = 'All' | 'GameOnly' | 'GameAndDiscord';
 
 export type StartupWindowMode = 'Normal' | 'Minimized';
@@ -286,12 +290,18 @@ export interface Settings {
   inputNoiseSuppression: boolean;
   selectedDisplay: Display | null;
   displayCaptureMethod: DisplayCaptureMethod;
+  inputOverlayEnabled: boolean;
+  inputOverlayStyle: InputOverlayStyle;
+  inputOverlayPosition: InputOverlayPosition;
+  inputOverlayScale: number;
+  inputOverlayOpacity: number;
   selectedOBSVersion: string | null; // null means automatic (latest non-beta)
   enableAi: boolean;
   autoGenerateHighlights: boolean;
   runOnStartup: boolean;
   startupWindowMode: StartupWindowMode; // Window state when launched from startup
   receiveBetaUpdates: boolean;
+  updateRepository: string;
   airplaneMode: boolean; // Hides cloud account/login/upload features and signs the user out
   recordingMode: RecordingMode;
   replayBufferDuration: number; // in seconds
@@ -365,12 +375,18 @@ export const initialSettings: Settings = {
   inputNoiseSuppression: true,
   selectedDisplay: null, // Default to null (auto-select)
   displayCaptureMethod: 'Auto',
+  inputOverlayEnabled: false,
+  inputOverlayStyle: 'KeyboardMouse',
+  inputOverlayPosition: 'BottomLeft',
+  inputOverlayScale: 1,
+  inputOverlayOpacity: 1,
   selectedOBSVersion: null, // null means automatic (latest non-beta)
   enableAi: true,
   autoGenerateHighlights: true,
   runOnStartup: false,
   startupWindowMode: 'Minimized',
   receiveBetaUpdates: false,
+  updateRepository: '',
   airplaneMode: false,
   recordingMode: 'Hybrid',
   replayBufferDuration: 30,

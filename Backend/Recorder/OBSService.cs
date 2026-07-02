@@ -6,6 +6,7 @@ using Segra.Backend.App;
 using ObsKit.NET.Outputs;
 using ObsKit.NET.Signals;
 using ObsKit.NET.Sources;
+using ObsKit.NET.Filters;
 using Segra.Backend.Core;
 using System.Diagnostics;
 using NAudio.CoreAudioApi;
@@ -43,6 +44,10 @@ namespace Segra.Backend.Recorder
         private const int OBS_OUTPUT_ENCODE_ERROR = -8;
         private const int OBS_OUTPUT_HDR_DISABLED = -9;
 
+        private const string InputOverlayVersion = "5.0.6";
+        private const string InputOverlayPluginUrl = "https://github.com/univrsal/input-overlay/releases/download/5.0.6/input-overlay-5.0.6-windows-x64.zip";
+        private const string InputOverlayPresetsUrl = "https://github.com/univrsal/input-overlay/releases/download/5.0.6/input-overlay-5.0.6-presets.zip";
+
         [GeneratedRegex(@"BufferDesc\.Width:\s*(\d+)")]
         private static partial Regex BufferDescWidthRegex();
 
@@ -59,6 +64,8 @@ namespace Segra.Backend.Recorder
         private static Scene? _mainScene;
         private static SceneItem? _gameCaptureItem;
         private static SceneItem? _displayItem;
+        private static readonly List<SceneItem> _inputOverlayItems = [];
+        private static readonly List<Source> _inputOverlaySources = [];
 
         private static RecordingOutput? _output;
         private static ReplayBuffer? _bufferOutput;
@@ -744,6 +751,8 @@ namespace Segra.Backend.Recorder
                 }
             }
 
+            AddInputOverlaySources();
+
             // Set scene as program output (channel 0)
             Obs.SetOutputSource(_mainScene);
 
@@ -1150,6 +1159,180 @@ namespace Segra.Backend.Recorder
                 _ = GameIntegrationService.Start(GameUtils.GetIgdbIdFromExePath(exePath), GameUtils.GetGameNameFromExePath(exePath), exePath);
             }
             return true;
+        }
+
+        private static void AddInputOverlaySources()
+        {
+            if (!Settings.Instance.InputOverlayEnabled || _mainScene == null)
+                return;
+
+            try
+            {
+                if (!Obs.EnumerateSourceTypes().Contains("input-overlay"))
+                {
+                    Log.Warning("Input Overlay OBS plugin is not loaded; skipping input overlay source");
+                    return;
+                }
+
+                // ponytail: bundled input-overlay presets only; add a custom layout picker if users ask.
+                if (Settings.Instance.InputOverlayStyle == InputOverlayStyle.KeyboardMouse)
+                    AddKeyboardMouseInputOverlay();
+                else
+                    AddControllerInputOverlay(Settings.Instance.InputOverlayStyle);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to add input overlay: {ex.Message}");
+            }
+        }
+
+        private static void AddKeyboardMouseInputOverlay()
+        {
+            float scale = GetInputOverlayScale();
+            float gap = 16f * scale;
+            float keyboardWidth = _currentBaseWidth * 0.32f * scale;
+            float keyboardHeight = keyboardWidth * 783f / 1831f;
+            float mouseWidth = _currentBaseWidth * 0.075f * scale;
+            float mouseHeight = mouseWidth * 421f / 285f;
+
+            var keyboardItem = CreateInputOverlaySource("Input Overlay Keyboard", "qwerty", "qwerty", selectGamepad: false);
+            var mouseItem = CreateInputOverlaySource("Input Overlay Mouse", "mouse", "mouse-dot", selectGamepad: false);
+
+            if (keyboardItem != null && mouseItem != null)
+            {
+                float totalWidth = keyboardWidth + gap + mouseWidth;
+                float totalHeight = Math.Max(keyboardHeight, mouseHeight);
+                var (x, y) = GetInputOverlayAnchor(totalWidth, totalHeight);
+                bool bottom = IsInputOverlayBottomAligned();
+
+                PlaceInputOverlay(keyboardItem, x, y + (bottom ? totalHeight - keyboardHeight : 0), keyboardWidth, keyboardHeight);
+                PlaceInputOverlay(mouseItem, x + keyboardWidth + gap, y + (bottom ? totalHeight - mouseHeight : 0), mouseWidth, mouseHeight);
+                return;
+            }
+
+            if (keyboardItem != null)
+            {
+                var (x, y) = GetInputOverlayAnchor(keyboardWidth, keyboardHeight);
+                PlaceInputOverlay(keyboardItem, x, y, keyboardWidth, keyboardHeight);
+            }
+            else if (mouseItem != null)
+            {
+                var (x, y) = GetInputOverlayAnchor(mouseWidth, mouseHeight);
+                PlaceInputOverlay(mouseItem, x, y, mouseWidth, mouseHeight);
+            }
+        }
+
+        private static void AddControllerInputOverlay(InputOverlayStyle style)
+        {
+            bool xbox = style == InputOverlayStyle.XboxController;
+            var item = CreateInputOverlaySource(
+                xbox ? "Input Overlay Xbox Controller" : "Input Overlay PlayStation Controller",
+                xbox ? "xbox-controller" : "dualsense",
+                xbox ? "xbox-controller" : "dualsense",
+                selectGamepad: true);
+
+            if (item == null)
+                return;
+
+            float width = _currentBaseWidth * 0.20f * GetInputOverlayScale();
+            float height = width * (xbox ? 1242f / 2048f : 788f / 1344f);
+            var (x, y) = GetInputOverlayAnchor(width, height);
+            PlaceInputOverlay(item, x, y, width, height);
+        }
+
+        private static SceneItem? CreateInputOverlaySource(string name, string presetDirectory, string presetName, bool selectGamepad)
+        {
+            string presetRoot = GetInputOverlayPresetRoot();
+            string imagePath = Path.Combine(presetRoot, "presets", presetDirectory, presetName + ".png");
+            string layoutPath = Path.Combine(presetRoot, "presets", presetDirectory, presetName + ".json");
+
+            if (!File.Exists(imagePath) || !File.Exists(layoutPath))
+            {
+                Log.Warning($"Input overlay preset is missing: {layoutPath}");
+                return null;
+            }
+
+            using var sourceSettings = new ObsKit.NET.Core.Settings();
+            sourceSettings.Set("io.overlay_image", imagePath);
+            sourceSettings.Set("io.layout_file", layoutPath);
+            sourceSettings.Set("linear_alpha", false);
+            sourceSettings.Set("io.input_source", "");
+            sourceSettings.Set("io.mouse_sens", 160L);
+            sourceSettings.Set("io.monitor_use_center", false);
+            sourceSettings.Set("io.mouse_deadzone", 0L);
+
+            var source = new Source("input-overlay", name, sourceSettings);
+
+            if (selectGamepad)
+                SelectFirstInputOverlayController(source, name);
+
+            if (Settings.Instance.InputOverlayOpacity < 0.999)
+            {
+                try
+                {
+                    source.AddFilter(new ColorCorrectionFilter(name + " Opacity").SetOpacity(Settings.Instance.InputOverlayOpacity));
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Could not set opacity for {name}: {ex.Message}");
+                }
+            }
+
+            var item = _mainScene!.AddSource(source);
+            _inputOverlaySources.Add(source);
+            _inputOverlayItems.Add(item);
+            Log.Information($"Added input overlay source: {name}");
+            return item;
+        }
+
+        private static void SelectFirstInputOverlayController(Source source, string sourceName)
+        {
+            try
+            {
+                var controllers = source.GetListPropertyItems("io.controller_id");
+                var controller = controllers.FirstOrDefault(c => !string.IsNullOrEmpty(c.Value));
+                if (!string.IsNullOrEmpty(controller.Value))
+                {
+                    source.Update(s => s.Set("io.controller_id", controller.Value));
+                    Log.Information($"{sourceName} using controller: {controller.Name}");
+                }
+                else
+                {
+                    Log.Information($"{sourceName} did not find a controller; connect one before starting the recording to show controller input.");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not select controller for {sourceName}: {ex.Message}");
+            }
+        }
+
+        private static float GetInputOverlayScale() => Math.Clamp((float)Settings.Instance.InputOverlayScale, 0.5f, 2.0f);
+
+        private static bool IsInputOverlayBottomAligned() =>
+            Settings.Instance.InputOverlayPosition == InputOverlayPosition.BottomLeft ||
+            Settings.Instance.InputOverlayPosition == InputOverlayPosition.BottomRight;
+
+        private static (float X, float Y) GetInputOverlayAnchor(float width, float height)
+        {
+            float margin = Math.Max(16f, _currentBaseHeight * 0.03f);
+            bool right = Settings.Instance.InputOverlayPosition == InputOverlayPosition.TopRight ||
+                Settings.Instance.InputOverlayPosition == InputOverlayPosition.BottomRight;
+            bool bottom = IsInputOverlayBottomAligned();
+
+            float x = right ? _currentBaseWidth - margin - width : margin;
+            float y = bottom ? _currentBaseHeight - margin - height : margin;
+            return (Math.Max(0, x), Math.Max(0, y));
+        }
+
+        private static void PlaceInputOverlay(SceneItem item, float x, float y, float width, float height)
+        {
+            item.Alignment = (uint)ObsAlignment.TopLeft;
+            item.BoundsAlignment = ObsAlignment.TopLeft;
+            item.SetBounds(ObsBoundsType.ScaleInner, width, height)
+                .SetPosition(x, y)
+                .SetScaleFilter(ObsScaleType.Lanczos);
+            item.MoveToTop();
         }
 
         public static void AddMonitorCapture()
@@ -1960,7 +2143,8 @@ namespace Segra.Backend.Recorder
         public static void DisposeSources()
         {
             // Dispose these first, while the scene is still alive, so SceneItem.Remove() can run
-            // (the helpers no-op once _displayItem/_gameCaptureItem are null).
+            // (the helpers no-op once their SceneItems are null).
+            DisposeInputOverlaySources();
             DisposeDisplaySource();
             DisposeGameCaptureSource();
 
@@ -2033,6 +2217,35 @@ namespace Segra.Backend.Recorder
                 }
             }
             _voiceChatSources.Clear();
+        }
+
+        public static void DisposeInputOverlaySources()
+        {
+            foreach (var item in _inputOverlayItems)
+            {
+                try
+                {
+                    item.Remove();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Failed to remove input overlay scene item: {ex.Message}");
+                }
+            }
+            _inputOverlayItems.Clear();
+
+            foreach (var source in _inputOverlaySources)
+            {
+                try
+                {
+                    source.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning($"Failed to dispose input overlay source: {ex.Message}");
+                }
+            }
+            _inputOverlaySources.Clear();
         }
 
         public static void DisposeGameCaptureSource()
@@ -2395,6 +2608,7 @@ namespace Segra.Backend.Recorder
             if (IsOBSInstalled() && !Settings.Instance.PendingOBSUpdate)
             {
                 Log.Information("OBS is installed");
+                await EnsureInputOverlayInstalledAsync();
                 // Refresh versions for the UI in the background; don't stall init on this network call.
                 _ = AvailableOBSVersionsAsync();
                 return;
@@ -2568,6 +2782,8 @@ namespace Segra.Backend.Recorder
                     throw;
                 }
 
+                await EnsureInputOverlayInstalledAsync();
+
                 Log.Information("OBS setup complete");
                 return;
             }
@@ -2575,6 +2791,73 @@ namespace Segra.Backend.Recorder
             // Throw so InitializeAsync shows the recorder-error modal instead of failing silently.
             Log.Error("No OBS versions available to install the recorder (version server unreachable).");
             throw new InvalidOperationException("No OBS versions available to install the recorder.");
+        }
+
+        private static async Task EnsureInputOverlayInstalledAsync()
+        {
+            if (!OperatingSystem.IsWindows())
+                return;
+
+            string currentDirectory = AppDomain.CurrentDomain.BaseDirectory;
+            string pluginPath = Path.Combine(currentDirectory, "obs-plugins", "64bit", "input-overlay.dll");
+            string presetCheckPath = Path.Combine(GetInputOverlayPresetRoot(), "presets", "qwerty", "qwerty.json");
+
+            if (File.Exists(pluginPath) && File.Exists(presetCheckPath))
+                return;
+
+            try
+            {
+                using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(60) };
+                httpClient.DefaultRequestHeaders.Add("User-Agent", "Segra");
+
+                string appDataDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra");
+                Directory.CreateDirectory(appDataDir);
+
+                if (!File.Exists(pluginPath))
+                {
+                    string pluginZip = Path.Combine(appDataDir, $"input-overlay-{InputOverlayVersion}-windows-x64.zip");
+                    await DownloadFileAsync(httpClient, InputOverlayPluginUrl, pluginZip);
+                    ZipFile.ExtractToDirectory(pluginZip, currentDirectory, true);
+                    Log.Information($"Installed Input Overlay OBS plugin {InputOverlayVersion}");
+                }
+
+                if (!File.Exists(presetCheckPath))
+                {
+                    string presetRoot = GetInputOverlayPresetRoot();
+                    Directory.CreateDirectory(presetRoot);
+                    string presetsZip = Path.Combine(appDataDir, $"input-overlay-{InputOverlayVersion}-presets.zip");
+                    await DownloadFileAsync(httpClient, InputOverlayPresetsUrl, presetsZip);
+                    ExtractInputOverlayPresets(presetsZip, presetRoot);
+                    Log.Information($"Installed Input Overlay presets {InputOverlayVersion}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Input Overlay plugin install failed; recordings will continue without it: {ex.Message}");
+            }
+        }
+
+        private static string GetInputOverlayPresetRoot() =>
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Segra", "InputOverlay", InputOverlayVersion);
+
+        private static async Task DownloadFileAsync(HttpClient httpClient, string url, string path)
+        {
+            using var response = await httpClient.GetAsync(url, HttpCompletionOption.ResponseHeadersRead);
+            response.EnsureSuccessStatusCode();
+            await using var input = await response.Content.ReadAsStreamAsync();
+            await using var output = new FileStream(path, FileMode.Create, FileAccess.Write, FileShare.None, 8192, true);
+            await input.CopyToAsync(output);
+        }
+
+        private static void ExtractInputOverlayPresets(string presetsZip, string presetRoot)
+        {
+            ZipFile.ExtractToDirectory(presetsZip, presetRoot, true);
+
+            // The release presets zip wraps the real presets zip.
+            string? nestedZip = Directory.GetFiles(presetRoot, "input-overlay-*-presets.zip", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault(path => !string.Equals(path, presetsZip, StringComparison.OrdinalIgnoreCase));
+            if (nestedZip != null)
+                ZipFile.ExtractToDirectory(nestedZip, presetRoot, true);
         }
 
         private class GitHubFileMetadata

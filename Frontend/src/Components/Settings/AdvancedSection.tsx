@@ -76,6 +76,19 @@ export default function AdvancedSection({
               </div>
             </div>
           </div>
+          <div className="form-control max-w-xl">
+            <label className="label pb-1">
+              <span className="label-text text-base-content">Update Repository</span>
+            </label>
+            <input
+              type="text"
+              value={settings.updateRepository}
+              onChange={(e) => updateSettings({ updateRepository: e.target.value })}
+              placeholder="owner/repo or https://github.com/owner/repo"
+              className="input input-bordered bg-base-200 w-full"
+            />
+            <p className="text-xs text-base-content/70 mt-1">Leave blank to use Segergren/Segra.</p>
+          </div>
           <div className="flex items-center">
             <Button
               variant="primary"

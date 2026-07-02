@@ -51,6 +51,7 @@ namespace Segra.Backend.Core.Models
         private bool _runOnStartup = false;
         private StartupWindowMode _startupWindowMode = StartupWindowMode.Minimized;
         private bool _receiveBetaUpdates = false;
+        private string _updateRepository = string.Empty;
         private bool _airplaneMode = false;
         private RecordingMode _recordingMode = RecordingMode.Hybrid;
         private int _replayBufferDuration = 30;
@@ -81,6 +82,11 @@ namespace Segra.Backend.Core.Models
         private bool _discardSessionsWithoutBookmarks = false;
         private bool _disableWindowsGameMode = false;
         private GameIntegrations _gameIntegrations = new GameIntegrations();
+        private bool _inputOverlayEnabled = false;
+        private InputOverlayStyle _inputOverlayStyle = InputOverlayStyle.KeyboardMouse;
+        private InputOverlayPosition _inputOverlayPosition = InputOverlayPosition.BottomLeft;
+        private double _inputOverlayScale = 1.0;
+        private double _inputOverlayOpacity = 1.0;
 
         private List<MenuItemPreference> _menuItems = KnownMenuItemIds
             .Select(id => new MenuItemPreference { Id = id, Visible = true })
@@ -462,6 +468,13 @@ namespace Segra.Backend.Core.Models
                     _receiveBetaUpdates = value;
                 }
             }
+        }
+
+        [JsonPropertyName("updateRepository")]
+        public string UpdateRepository
+        {
+            get => _updateRepository;
+            set => _updateRepository = value?.Trim() ?? string.Empty;
         }
 
         [JsonPropertyName("airplaneMode")]
@@ -852,6 +865,41 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        [JsonPropertyName("inputOverlayEnabled")]
+        public bool InputOverlayEnabled
+        {
+            get => _inputOverlayEnabled;
+            set => _inputOverlayEnabled = value;
+        }
+
+        [JsonPropertyName("inputOverlayStyle")]
+        public InputOverlayStyle InputOverlayStyle
+        {
+            get => _inputOverlayStyle;
+            set => _inputOverlayStyle = value;
+        }
+
+        [JsonPropertyName("inputOverlayPosition")]
+        public InputOverlayPosition InputOverlayPosition
+        {
+            get => _inputOverlayPosition;
+            set => _inputOverlayPosition = value;
+        }
+
+        [JsonPropertyName("inputOverlayScale")]
+        public double InputOverlayScale
+        {
+            get => _inputOverlayScale;
+            set => _inputOverlayScale = Math.Clamp(value, 0.5, 2.0);
+        }
+
+        [JsonPropertyName("inputOverlayOpacity")]
+        public double InputOverlayOpacity
+        {
+            get => _inputOverlayOpacity;
+            set => _inputOverlayOpacity = Math.Clamp(value, 0.1, 1.0);
+        }
+
         [JsonPropertyName("selectedOBSVersion")]
         public string? SelectedOBSVersion
         {
@@ -1235,6 +1283,23 @@ namespace Segra.Backend.Core.Models
         Auto,
         DXGI,
         WGC
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum InputOverlayStyle
+    {
+        KeyboardMouse,
+        XboxController,
+        PlayStationController
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum InputOverlayPosition
+    {
+        TopLeft,
+        TopRight,
+        BottomLeft,
+        BottomRight
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]

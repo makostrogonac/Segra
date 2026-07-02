@@ -661,6 +661,41 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.InputOverlayEnabled != updatedSettings.InputOverlayEnabled)
+            {
+                Log.Information($"InputOverlayEnabled changed from '{settings.InputOverlayEnabled}' to '{updatedSettings.InputOverlayEnabled}'");
+                settings.InputOverlayEnabled = updatedSettings.InputOverlayEnabled;
+                hasChanges = true;
+            }
+
+            if (settings.InputOverlayStyle != updatedSettings.InputOverlayStyle)
+            {
+                Log.Information($"InputOverlayStyle changed from '{settings.InputOverlayStyle}' to '{updatedSettings.InputOverlayStyle}'");
+                settings.InputOverlayStyle = updatedSettings.InputOverlayStyle;
+                hasChanges = true;
+            }
+
+            if (settings.InputOverlayPosition != updatedSettings.InputOverlayPosition)
+            {
+                Log.Information($"InputOverlayPosition changed from '{settings.InputOverlayPosition}' to '{updatedSettings.InputOverlayPosition}'");
+                settings.InputOverlayPosition = updatedSettings.InputOverlayPosition;
+                hasChanges = true;
+            }
+
+            if (settings.InputOverlayScale != updatedSettings.InputOverlayScale)
+            {
+                Log.Information($"InputOverlayScale changed from '{settings.InputOverlayScale}' to '{updatedSettings.InputOverlayScale}'");
+                settings.InputOverlayScale = updatedSettings.InputOverlayScale;
+                hasChanges = true;
+            }
+
+            if (settings.InputOverlayOpacity != updatedSettings.InputOverlayOpacity)
+            {
+                Log.Information($"InputOverlayOpacity changed from '{settings.InputOverlayOpacity}' to '{updatedSettings.InputOverlayOpacity}'");
+                settings.InputOverlayOpacity = updatedSettings.InputOverlayOpacity;
+                hasChanges = true;
+            }
+
             if (settings.EnableAi != updatedSettings.EnableAi)
             {
                 Log.Information($"EnableAi changed from '{settings.EnableAi}' to '{updatedSettings.EnableAi}'");
@@ -696,6 +731,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
                 _ = Task.Run(() => UpdateService.UpdateAppIfNecessary(forceCheck: true));
                 _ = Task.Run(() => UpdateService.GetReleaseNotes(forceCheck: true));
+            }
+
+            if (settings.UpdateRepository != updatedSettings.UpdateRepository)
+            {
+                Log.Information($"UpdateRepository changed from '{settings.UpdateRepository}' to '{updatedSettings.UpdateRepository}'");
+                settings.UpdateRepository = updatedSettings.UpdateRepository;
+                hasChanges = true;
             }
 
             if (settings.RunOnStartup != updatedSettings.RunOnStartup)

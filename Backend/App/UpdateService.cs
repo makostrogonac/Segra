@@ -12,8 +12,9 @@ namespace Segra.Backend.App
     public static class UpdateService
     {
         public static UpdateInfo? LatestUpdateInfo { get; private set; } = null;
-        public static GithubSource Source = new("https://github.com/Segergren/Segra", null, false);
-        public static GithubSource BetaSource = new("https://github.com/Segergren/Segra", null, true);
+        private const string DefaultUpdateRepository = "https://github.com/Segergren/Segra";
+        public static GithubSource Source => CreateSource(false);
+        public static GithubSource BetaSource => CreateSource(true);
         public static UpdateManager UpdateManager { get; private set; } = new(Source);
 
         // Serializes Velopack operations that share the on-disk .velopack_lock.
@@ -26,6 +27,44 @@ namespace Segra.Backend.App
         private static List<object>? _cachedReleaseNotesList = null;
         private static readonly object _updateProgressLock = new();
         private static object? _currentUpdateProgress = null;
+
+        private static GithubSource CreateSource(bool includePrereleases) =>
+            new(GetUpdateRepositoryUrl(), null, includePrereleases);
+
+        private static string GetUpdateRepositoryUrl() =>
+            TryGetGitHubRepository(Core.Models.Settings.Instance.UpdateRepository, out string owner, out string repo)
+                ? $"https://github.com/{owner}/{repo}"
+                : DefaultUpdateRepository;
+
+        private static string GetGitHubReleasesApiUrl()
+        {
+            _ = TryGetGitHubRepository(GetUpdateRepositoryUrl(), out string owner, out string repo);
+            return $"https://api.github.com/repos/{owner}/{repo}/releases";
+        }
+
+        private static bool TryGetGitHubRepository(string? value, out string owner, out string repo)
+        {
+            owner = string.Empty;
+            repo = string.Empty;
+            string candidate = value?.Trim().TrimEnd('/') ?? string.Empty;
+            if (candidate.Length == 0)
+                return false;
+
+            if (!candidate.Contains("://") && candidate.Count(c => c == '/') == 1)
+                candidate = $"https://github.com/{candidate}";
+
+            if (!Uri.TryCreate(candidate, UriKind.Absolute, out Uri? uri) ||
+                !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase))
+                return false;
+
+            string[] parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (parts.Length < 2)
+                return false;
+
+            owner = parts[0];
+            repo = parts[1].EndsWith(".git", StringComparison.OrdinalIgnoreCase) ? parts[1][..^4] : parts[1];
+            return owner.Length > 0 && repo.Length > 0;
+        }
 
         private static object SetCurrentUpdateProgress(string version, int progress, string status, string message)
         {
@@ -81,16 +120,8 @@ namespace Segra.Backend.App
                 Core.Models.AppState.Instance.IsCheckingForUpdates = true;
 
                 bool useBetaChannel = Core.Models.Settings.Instance.ReceiveBetaUpdates;
-                if (useBetaChannel)
-                {
-                    UpdateManager = new UpdateManager(BetaSource);
-                    Log.Information("Using beta update channel");
-                }
-                else
-                {
-                    UpdateManager = new UpdateManager(Source);
-                    Log.Information("Using stable update channel");
-                }
+                UpdateManager = new UpdateManager(CreateSource(useBetaChannel));
+                Log.Information($"Using {(useBetaChannel ? "beta" : "stable")} update channel from {GetUpdateRepositoryUrl()}");
 
                 if (!UpdateManager.IsInstalled)
                 {
@@ -203,7 +234,7 @@ namespace Segra.Backend.App
                 Core.Models.AppState.Instance.IsCheckingForUpdates = true;
 
                 bool useBetaChannel = Core.Models.Settings.Instance.ReceiveBetaUpdates;
-                UpdateManager = new UpdateManager(useBetaChannel ? BetaSource : Source);
+                UpdateManager = new UpdateManager(CreateSource(useBetaChannel));
                 var current = UpdateManager.CurrentVersion;
 
                 if (current == null || UpdateManager == null)
@@ -215,7 +246,7 @@ namespace Segra.Backend.App
                 string? appId = UpdateManager.AppId;
                 string channel = VelopackRuntimeInfo.SystemOs.GetOsShortName();
 
-                var updateSource = useBetaChannel ? BetaSource : Source;
+                var updateSource = CreateSource(useBetaChannel);
 
 #pragma warning disable CS8625 // Cannot convert null literal to non-nullable reference type
                 var feed = await updateSource.GetReleaseFeed(
@@ -298,7 +329,7 @@ namespace Segra.Backend.App
                 httpClient.DefaultRequestHeaders.UserAgent.Add(new ProductInfoHeaderValue("Segra", currentVersion.ToString()));
 
                 // Fetch releases from GitHub API
-                var response = await httpClient.GetAsync($"https://api.github.com/repos/Segergren/Segra/releases");
+                var response = await httpClient.GetAsync(GetGitHubReleasesApiUrl());
                 response.EnsureSuccessStatusCode();
 
                 var content = await response.Content.ReadAsStringAsync();

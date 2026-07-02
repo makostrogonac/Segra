@@ -1,0 +1,118 @@
+name: Sync Upstream Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_tag:
+        description: Upstream tag to merge. Blank = latest Segergren/Segra release.
+        required: false
+        type: string
+  schedule:
+    - cron: '17 6 * * *'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-build-release:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FORK_SYNC_TOKEN || github.token }}
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Pick upstream release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = '${{ inputs.upstream_tag }}'.Trim()
+          if (-not $tag) {
+            $tag = gh api repos/Segergren/Segra/releases/latest --jq .tag_name
+          }
+          if (-not $tag.StartsWith('v')) { $tag = "v$tag" }
+          $version = $tag -replace '^v', ''
+
+          $ErrorActionPreference = 'Continue'
+          gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          $ErrorActionPreference = 'Stop'
+          if ($releaseExists) {
+            "SKIP_RELEASE=true" >> $env:GITHUB_ENV
+            Write-Host "Fork release $tag already exists; nothing to do."
+            exit 0
+          }
+
+          "UPSTREAM_TAG=$tag" >> $env:GITHUB_ENV
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - name: Merge upstream release
+        if: env.SKIP_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Segergren/Segra.git
+          git fetch upstream "refs/tags/$env:UPSTREAM_TAG`:refs/remotes/upstream-tags/$env:UPSTREAM_TAG"
+          git merge --no-edit "refs/remotes/upstream-tags/$env:UPSTREAM_TAG"
+
+      - name: Build frontend
+        if: env.SKIP_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          Push-Location Frontend
+          npm ci
+          npm run build
+          Pop-Location
+
+          $destination = './Resources/wwwroot'
+          if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+          Remove-Item -Path "$destination\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path './Frontend/dist/*' -Destination $destination -Recurse -Force
+
+      - name: Publish app
+        if: env.SKIP_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          dotnet restore -r win-x64
+          dotnet publish .\Segra.csproj -c Release --self-contained -r win-x64 -o publish --no-restore -p:Version=$env:VERSION
+
+      - name: Package installer
+        if: env.SKIP_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          dotnet tool install --tool-path .\.tools vpk --version 1.2.0
+          .\.tools\vpk.exe pack -u Segra -v $env:VERSION -p .\publish -e Segra.exe -o .\output --packTitle "Segra" --noPortable -i .\Resources\icon.ico -s .\Resources\splash.png --splashProgressColor "#fecb00" --framework webview2
+
+      - name: Push merged branch and tag
+        if: env.SKIP_RELEASE != 'true'
+        shell: pwsh
+        run: |
+          git push origin HEAD:${{ github.ref_name }}
+          git tag -f $env:UPSTREAM_TAG
+          git push --force origin $env:UPSTREAM_TAG
+
+      - name: Create GitHub release
+        if: env.SKIP_RELEASE != 'true'
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.UPSTREAM_TAG }}
+          name: Release ${{ env.UPSTREAM_TAG }}
+          prerelease: false
+          files: |
+            ./output/Segra-win-Setup.exe
+            ./output/RELEASES
+            ./output/releases.win.json
+            ./output/assets.win.json
+            ./output/Segra-${{ env.VERSION }}-full.nupkg

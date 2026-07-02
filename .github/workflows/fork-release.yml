@@ -1,0 +1,77 @@
+name: Fork Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to release, for example 1.6.3
+        required: true
+        type: string
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: Frontend/package-lock.json
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Set version
+        shell: pwsh
+        run: |
+          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' -replace '^v', '' } else { '${{ inputs.version }}' -replace '^v', '' }
+          if (-not $version) { throw 'Missing version' }
+          "VERSION=$version" >> $env:GITHUB_ENV
+          "TAG=v$version" >> $env:GITHUB_ENV
+
+      - name: Build frontend
+        shell: pwsh
+        run: |
+          Push-Location Frontend
+          npm ci
+          npm run build
+          Pop-Location
+
+          $destination = './Resources/wwwroot'
+          if (-not (Test-Path $destination)) { New-Item -ItemType Directory -Path $destination -Force | Out-Null }
+          Remove-Item -Path "$destination\*" -Recurse -Force -ErrorAction SilentlyContinue
+          Copy-Item -Path './Frontend/dist/*' -Destination $destination -Recurse -Force
+
+      - name: Publish app
+        shell: pwsh
+        run: |
+          dotnet restore -r win-x64
+          dotnet publish .\Segra.csproj -c Release --self-contained -r win-x64 -o publish --no-restore -p:Version=$env:VERSION
+
+      - name: Package installer
+        shell: pwsh
+        run: |
+          dotnet tool install --tool-path .\.tools vpk --version 1.2.0
+          .\.tools\vpk.exe pack -u Segra -v $env:VERSION -p .\publish -e Segra.exe -o .\output --packTitle "Segra" --noPortable -i .\Resources\icon.ico -s .\Resources\splash.png --splashProgressColor "#fecb00" --framework webview2
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Release ${{ env.TAG }}
+          prerelease: false
+          files: |
+            ./output/Segra-win-Setup.exe
+            ./output/RELEASES
+            ./output/releases.win.json
+            ./output/assets.win.json
+            ./output/Segra-${{ env.VERSION }}-full.nupkg
