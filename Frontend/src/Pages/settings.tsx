@@ -8,7 +8,6 @@ import StorageSettingsSection from '../Components/Settings/StorageSettingsSectio
 import ClipSettingsSection from '../Components/Settings/ClipSettingsSection';
 import AudioDevicesSection from '../Components/Settings/AudioDevicesSection';
 import KeybindingsSection from '../Components/Settings/KeybindingsSection';
-import InputOverlaySection from '../Components/Settings/InputOverlaySection';
 import GameDetectionSection from '../Components/Settings/GameDetectionSection';
 import GameIntegrationsSection from '../Components/Settings/GameIntegrationsSection';
 import HighlightsSection from '../Components/Settings/HighlightsSection';
@@ -154,7 +153,6 @@ export default function Settings() {
         <VideoSettingsSection settings={settings} updateSettings={updateSettings} />
         <AudioDevicesSection settings={settings} updateSettings={updateSettings} />
         <KeybindingsSection settings={settings} updateSettings={updateSettings} />
-        <InputOverlaySection settings={settings} updateSettings={updateSettings} />
 
         {/* CLIPS */}
         <SectionHeader id="clips">Clips</SectionHeader>

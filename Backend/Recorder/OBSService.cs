@@ -1156,7 +1156,7 @@ namespace Segra.Backend.Recorder
             StartDroppedFrameMonitor();
 
             Log.Information("Recording started: " + videoOutputPath);
-            if (!string.IsNullOrEmpty(videoOutputPath) && Settings.Instance.InputOverlayEnabled)
+            if (!string.IsNullOrEmpty(videoOutputPath))
                 InputCaptureService.Start(videoOutputPath, startTime ?? DateTime.Now);
             GeneralUtils.SetProcessPriority(ProcessPriorityClass.High);
             if (!isReplayBufferMode)

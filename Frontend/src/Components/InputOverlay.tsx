@@ -1,491 +1,643 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { useSettings } from '../Context/SettingsContext';
-import { Keyboard, Gamepad2, Eye, EyeOff } from 'lucide-react';
+import { Keyboard, Gamepad2, Eye, EyeOff, Settings as SettingsIcon } from 'lucide-react';
+import {
+  InputOverlayPrefs,
+  OverlayPosition,
+  OverlayPreset,
+  loadPrefs,
+  savePrefs,
+  presetBox,
+} from './inputOverlayPresets';
+import InputOverlayEditor from './InputOverlayEditor';
 
-// ponytail: post-hoc input overlay. Reads {recording}.inputs.json (NDJSON snapshots captured
-// during recording) and renders a toggleable keyboard/mouse or gamepad overlay over the editor
-// <video>, driven by currentTime. Non-destructive: purely an editor preview layer.
+// ponytail: post-hoc input overlay. Reads {recording}.inputs.json (NDJSON captured during
+// recording) and renders a toggleable keyboard/mouse or gamepad overlay over the editor <video>,
+// driven by currentTime. Non-destructive. Appearance prefs live in localStorage (not settings)
+// because capture is always-on and the style is chosen while viewing.
 
 interface InputSample {
-    t: number;
-    k: number[];
-    mb: number;
-    w: number;
-    cb: number;
-    lt: number;
-    rt: number;
-    lx: number;
-    ly: number;
-    rx: number;
-    ry: number;
+  t: number;
+  k: number[];
+  mb: number;
+  mx: number;
+  my: number;
+  w: number;
+  cb: number;
+  lt: number;
+  rt: number;
+  lx: number;
+  ly: number;
+  rx: number;
+  ry: number;
 }
 
 // XInput wButtons bitmask
 const DPAD_UP = 0x0001,
-    DPAD_DOWN = 0x0002,
-    DPAD_LEFT = 0x0004,
-    DPAD_RIGHT = 0x0008,
-    BTN_START = 0x0010,
-    BTN_BACK = 0x0020,
-    LSHOULDER = 0x0100,
-    RSHOULDER = 0x0200,
-    BTN_A = 0x1000,
-    BTN_B = 0x2000,
-    BTN_X = 0x4000,
-    BTN_Y = 0x8000;
+  DPAD_DOWN = 0x0002,
+  DPAD_LEFT = 0x0004,
+  DPAD_RIGHT = 0x0008,
+  BTN_START = 0x0010,
+  BTN_BACK = 0x0020,
+  LSHOULDER = 0x0100,
+  RSHOULDER = 0x0200,
+  BTN_A = 0x1000,
+  BTN_B = 0x2000,
+  BTN_X = 0x4000,
+  BTN_Y = 0x8000;
 
-// Compact gaming keyboard layout (Windows VK codes).
-const KB_LAYOUT: { code: number; label: string; wide?: boolean }[][] = [
-    [
-        { code: 27, label: 'Esc' },
-        { code: 49, label: '1' },
-        { code: 50, label: '2' },
-        { code: 51, label: '3' },
-        { code: 52, label: '4' },
-        { code: 53, label: '5' },
-        { code: 54, label: '6' },
-    ],
-    [
-        { code: 9, label: 'Tab', wide: true },
-        { code: 81, label: 'Q' },
-        { code: 87, label: 'W' },
-        { code: 69, label: 'E' },
-        { code: 82, label: 'R' },
-    ],
-    [
-        { code: 20, label: 'Caps', wide: true },
-        { code: 65, label: 'A' },
-        { code: 83, label: 'S' },
-        { code: 68, label: 'D' },
-        { code: 70, label: 'F' },
-    ],
-    [
-        { code: 16, label: 'Shift', wide: true },
-        { code: 90, label: 'Z' },
-        { code: 88, label: 'X' },
-        { code: 67, label: 'C' },
-        { code: 86, label: 'V' },
-    ],
-    [
-        { code: 17, label: 'Ctrl', wide: true },
-        { code: 18, label: 'Alt', wide: true },
-        { code: 32, label: 'Space', wide: true },
-    ],
-];
-
-const POSITION_CLASS: Record<string, string> = {
-    TopLeft: 'top-2 left-2',
-    TopRight: 'top-2 right-2',
-    BottomLeft: 'bottom-2 left-2',
-    BottomRight: 'bottom-2 right-2',
+const POSITION_CLASS: Record<OverlayPosition, string> = {
+  TopLeft: 'top-2 left-2',
+  TopRight: 'top-2 right-2',
+  BottomLeft: 'bottom-2 left-2',
+  BottomRight: 'bottom-2 right-2',
 };
 
-const POSITION_ORIGIN: Record<string, string> = {
-    TopLeft: 'top left',
-    TopRight: 'top right',
-    BottomLeft: 'bottom left',
-    BottomRight: 'bottom right',
+const POSITION_ORIGIN: Record<OverlayPosition, string> = {
+  TopLeft: 'top left',
+  TopRight: 'top right',
+  BottomLeft: 'bottom left',
+  BottomRight: 'bottom right',
+};
+
+const POSITION_LABEL: Record<OverlayPosition, string> = {
+  TopLeft: 'TL',
+  TopRight: 'TR',
+  BottomLeft: 'BL',
+  BottomRight: 'BR',
 };
 
 function inputsJsonPath(filePath: string): string {
-    return filePath.replace(/\.[^.]+$/, '.inputs.json');
+  return filePath.replace(/\.[^.]+$/, '.inputs.json');
 }
 
-function binarySearchSample(samples: InputSample[], targetMs: number): InputSample | null {
-    if (samples.length === 0) return null;
-    let lo = 0;
-    let hi = samples.length - 1;
-    if (targetMs <= samples[0].t) return samples[0];
-    if (targetMs >= samples[hi].t) return samples[hi];
-    while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (samples[mid].t <= targetMs && (mid === samples.length - 1 || samples[mid + 1].t > targetMs))
-            return samples[mid];
-        if (samples[mid].t < targetMs) lo = mid + 1;
-        else hi = mid - 1;
-    }
-    return samples[lo] ?? null;
+function findSampleIndex(samples: InputSample[], targetMs: number): number {
+  if (samples.length === 0) return -1;
+  let lo = 0;
+  let hi = samples.length - 1;
+  if (targetMs <= samples[0].t) return 0;
+  if (targetMs >= samples[hi].t) return hi;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (samples[mid].t <= targetMs && (mid === samples.length - 1 || samples[mid + 1].t > targetMs))
+      return mid;
+    if (samples[mid].t < targetMs) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return lo;
 }
 
 export default function InputOverlay({
-    videoRef,
-    filePath,
+  videoRef,
+  filePath,
 }: {
-    videoRef: { current: HTMLVideoElement | null };
-    filePath: string;
+  videoRef: { current: HTMLVideoElement | null };
+  filePath: string;
 }) {
-    const settings = useSettings();
-    const [samples, setSamples] = useState<InputSample[]>([]);
-    const [available, setAvailable] = useState(false);
-    const [enabled, setEnabled] = useState(settings.inputOverlayEnabled);
-    const [current, setCurrent] = useState<InputSample | null>(null);
-    const rafRef = useRef<number | null>(null);
-    const lastUpdateRef = useRef(0);
+  const [prefs, setPrefs] = useState<InputOverlayPrefs>(() => loadPrefs());
+  const [samples, setSamples] = useState<InputSample[]>([]);
+  const [available, setAvailable] = useState(false);
+  const [currentIdx, setCurrentIdx] = useState(-1);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const rafRef = useRef<number | null>(null);
+  const lastUpdateRef = useRef(0);
 
-    // Load the captured input stream for this recording.
-    useEffect(() => {
-        let cancelled = false;
-        setAvailable(false);
-        setSamples([]);
-        const url = `http://localhost:2222/api/content?input=${encodeURIComponent(inputsJsonPath(filePath))}`;
-        fetch(url)
-            .then((r) => {
-                if (!r.ok) return null;
-                return r.text();
-            })
-            .then((text) => {
-                if (cancelled || !text) return;
-                const parsed: InputSample[] = [];
-                for (const line of text.split('\n')) {
-                    const trimmed = line.trim();
-                    if (!trimmed) continue;
-                    try {
-                        parsed.push(JSON.parse(trimmed) as InputSample);
-                    } catch {
-                        // skip malformed/partial trailing line
-                    }
-                }
-                parsed.sort((a, b) => a.t - b.t);
-                setSamples(parsed);
-                setAvailable(parsed.length > 0);
-            })
-            .catch(() => setAvailable(false));
-        return () => {
-            cancelled = true;
-        };
-    }, [filePath]);
+  const setPref = (patch: Partial<InputOverlayPrefs>) =>
+    setPrefs((prev) => {
+      const next = { ...prev, ...patch };
+      savePrefs(next);
+      return next;
+    });
 
-    // Drive the overlay from the video's currentTime.
-    useEffect(() => {
-        if (!enabled || !available) {
-            setCurrent(null);
-            return;
+  // Load the captured input stream for this recording.
+  useEffect(() => {
+    let cancelled = false;
+    setAvailable(false);
+    setSamples([]);
+    const url = `http://localhost:2222/api/content?input=${encodeURIComponent(inputsJsonPath(filePath))}`;
+    fetch(url)
+      .then((r) => (r.ok ? r.text() : null))
+      .then((text) => {
+        if (cancelled || !text) return;
+        const parsed: InputSample[] = [];
+        for (const line of text.split('\n')) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          try {
+            parsed.push(JSON.parse(trimmed) as InputSample);
+          } catch {
+            // skip malformed/partial trailing line
+          }
         }
-        const loop = () => {
-            const now = performance.now();
-            if (now - lastUpdateRef.current >= 33) {
-                lastUpdateRef.current = now;
-                const v = videoRef.current;
-                if (v && samples.length) {
-                    setCurrent(binarySearchSample(samples, v.currentTime * 1000));
-                }
-            }
-            rafRef.current = requestAnimationFrame(loop);
-        };
-        rafRef.current = requestAnimationFrame(loop);
-        return () => {
-            if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
-        };
-    }, [enabled, available, samples, videoRef]);
+        parsed.sort((a, b) => a.t - b.t);
+        setSamples(parsed);
+        setAvailable(parsed.length > 0);
+      })
+      .catch(() => setAvailable(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [filePath]);
 
-    if (!available) return null;
+  // Drive the overlay from the video's currentTime.
+  useEffect(() => {
+    if (!prefs.enabled || !available) {
+      setCurrentIdx(-1);
+      return;
+    }
+    const loop = () => {
+      const now = performance.now();
+      if (now - lastUpdateRef.current >= 33) {
+        lastUpdateRef.current = now;
+        const v = videoRef.current;
+        if (v && samples.length) setCurrentIdx(findSampleIndex(samples, v.currentTime * 1000));
+      }
+      rafRef.current = requestAnimationFrame(loop);
+    };
+    rafRef.current = requestAnimationFrame(loop);
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    };
+  }, [prefs.enabled, available, samples, videoRef]);
 
-    const style = settings.inputOverlayStyle;
-    const posClass = POSITION_CLASS[settings.inputOverlayPosition] ?? POSITION_CLASS.BottomLeft;
-    const origin = POSITION_ORIGIN[settings.inputOverlayPosition] ?? 'bottom left';
-    const scale = settings.inputOverlayScale;
-    const opacity = settings.inputOverlayOpacity;
+  if (!available) return null;
 
-    const keysDown = new Set(current?.k ?? []);
-    const mb = current?.mb ?? 0;
-    const wheel = current?.w ?? 0;
-    const cb = current?.cb ?? 0;
-    const lt = current?.lt ?? 0;
-    const rt = current?.rt ?? 0;
-    const lx = current?.lx ?? 0;
-    const ly = current?.ly ?? 0;
-    const rx = current?.rx ?? 0;
-    const ry = current?.ry ?? 0;
+  const isController = prefs.style === 'XboxController' || prefs.style === 'PlayStationController';
+  const posClass = POSITION_CLASS[prefs.position];
+  const origin = POSITION_ORIGIN[prefs.position];
+  const cur = currentIdx >= 0 ? samples[currentIdx] : null;
+  const keysDown = new Set(cur?.k ?? []);
+  const mb = cur?.mb ?? 0;
+  const wheel = cur?.w ?? 0;
+  const cb = cur?.cb ?? 0;
+  const lt = cur?.lt ?? 0;
+  const rt = cur?.rt ?? 0;
+  const lx = cur?.lx ?? 0;
+  const ly = cur?.ly ?? 0;
+  const rx = cur?.rx ?? 0;
+  const ry = cur?.ry ?? 0;
 
-    const isPlayStation = style === 'PlayStationController';
-    const isController = style === 'XboxController' || style === 'PlayStationController';
+  const btn = (active: boolean) =>
+    active ? 'btn btn-xs btn-primary' : 'btn btn-xs btn-ghost bg-black/60 text-white';
 
-    return (
-        <>
-            {/* Toggle button (always available when inputs were captured) */}
-            <button
-                onClick={() => setEnabled((e) => !e)}
-                title={enabled ? 'Hide input overlay' : 'Show input overlay'}
-                className={`absolute top-2 right-2 z-20 btn btn-xs gap-1 ${enabled ? 'btn-primary' : 'btn-ghost bg-black/60 text-white'}`}
-            >
-                {enabled ? <Eye size={14} /> : <EyeOff size={14} />}
-                {isController ? <Gamepad2 size={14} /> : <Keyboard size={14} />}
-            </button>
+  return (
+    <>
+      {/* Controls (always available when inputs were captured) */}
+      <div className="absolute right-2 top-2 z-30 flex flex-col items-end gap-1.5">
+        <div className="flex gap-1">
+          <button
+            onClick={() => setPref({ enabled: !prefs.enabled })}
+            title={prefs.enabled ? 'Hide input overlay' : 'Show input overlay'}
+            className={btn(prefs.enabled)}
+          >
+            {prefs.enabled ? <Eye size={14} /> : <EyeOff size={14} />}
+          </button>
+          <button
+            onClick={() => setPref({ style: 'KeyboardMouse' })}
+            title="Keyboard + mouse"
+            className={btn(prefs.style === 'KeyboardMouse')}
+          >
+            <Keyboard size={14} />
+          </button>
+          <button
+            onClick={() => setPref({ style: 'XboxController' })}
+            title="Xbox controller"
+            className={btn(prefs.style === 'XboxController')}
+          >
+            <Gamepad2 size={14} />
+          </button>
+          <button
+            onClick={() => setPref({ style: 'PlayStationController' })}
+            title="PlayStation controller"
+            className={btn(prefs.style === 'PlayStationController')}
+          >
+            <Gamepad2 size={14} />
+          </button>
+          <button
+            onClick={() => setPanelOpen((o) => !o)}
+            title="Overlay options"
+            className={btn(panelOpen)}
+          >
+            <SettingsIcon size={14} />
+          </button>
+        </div>
 
-            {enabled && current && (
-                <div
-                    className={`absolute z-10 pointer-events-none ${posClass}`}
-                    style={{
-                        opacity,
-                        transform: `scale(${scale})`,
-                        transformOrigin: origin,
-                    }}
-                >
-                    {isController ? (
-                        <Gamepad
-                            cb={cb}
-                            lt={lt}
-                            rt={rt}
-                            lx={lx}
-                            ly={ly}
-                            rx={rx}
-                            ry={ry}
-                            playstation={isPlayStation}
-                        />
-                    ) : (
-                        <KeyboardMouse keysDown={keysDown} mb={mb} wheel={wheel} />
-                    )}
-                </div>
+        {panelOpen && (
+          <div className="flex w-52 flex-col gap-2 rounded-lg bg-black/80 p-3">
+            <div>
+              <div className="mb-1 text-xs font-semibold text-white/70">Position</div>
+              <div className="grid grid-cols-2 gap-1">
+                {(Object.keys(POSITION_LABEL) as OverlayPosition[]).map((p) => (
+                  <button
+                    key={p}
+                    onClick={() => setPref({ position: p })}
+                    className={btn(prefs.position === p)}
+                  >
+                    {POSITION_LABEL[p]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div className="flex justify-between text-xs text-white/70">
+                <span>Size</span>
+                <span>{prefs.scale.toFixed(2)}×</span>
+              </div>
+              <input
+                type="range"
+                min={0.5}
+                max={2}
+                step={0.05}
+                value={prefs.scale}
+                onChange={(e) => setPref({ scale: Number(e.target.value) })}
+                className="range range-xs range-primary"
+              />
+            </div>
+            <div>
+              <div className="flex justify-between text-xs text-white/70">
+                <span>Opacity</span>
+                <span>{Math.round(prefs.opacity * 100)}%</span>
+              </div>
+              <input
+                type="range"
+                min={0.1}
+                max={1}
+                step={0.05}
+                value={prefs.opacity}
+                onChange={(e) => setPref({ opacity: Number(e.target.value) })}
+                className="range range-xs range-primary"
+              />
+            </div>
+            {!isController && (
+              <button
+                onClick={() => setEditorOpen(true)}
+                className="btn btn-xs btn-outline text-white"
+              >
+                Edit layout…
+              </button>
             )}
-        </>
-    );
+          </div>
+        )}
+      </div>
+
+      {editorOpen && (
+        <InputOverlayEditor
+          initial={prefs.preset}
+          onSave={(p) => {
+            setPref({ preset: p });
+            setEditorOpen(false);
+          }}
+          onClose={() => setEditorOpen(false)}
+        />
+      )}
+
+      {prefs.enabled && cur && (
+        <div
+          className={`pointer-events-none absolute z-10 ${posClass}`}
+          style={{
+            opacity: prefs.opacity,
+            transform: `scale(${prefs.scale})`,
+            transformOrigin: origin,
+          }}
+        >
+          {isController ? (
+            <Gamepad
+              cb={cb}
+              lt={lt}
+              rt={rt}
+              lx={lx}
+              ly={ly}
+              rx={rx}
+              ry={ry}
+              playstation={prefs.style === 'PlayStationController'}
+            />
+          ) : (
+            <KeyboardMouse
+              preset={prefs.preset}
+              keysDown={keysDown}
+              mb={mb}
+              wheel={wheel}
+              samples={samples}
+              idx={currentIdx}
+            />
+          )}
+        </div>
+      )}
+    </>
+  );
 }
 
-function Key({
-    label,
-    pressed,
-    wide,
+function KeyDiv({
+  k,
+  pressed,
 }: {
-    label: string;
-    pressed: boolean;
-    wide?: boolean;
+  k: { vk: number; label: string; x: number; y: number; w: number; h: number };
+  pressed: boolean;
 }) {
-    return (
-        <div
-            className={`flex items-center justify-center rounded border text-[10px] font-semibold leading-none transition-colors ${
-                wide ? 'w-9 h-7' : 'w-7 h-7'
-            } ${
-                pressed
-                    ? 'bg-yellow-400 text-black border-yellow-300'
-                    : 'bg-black/60 text-white/80 border-white/20'
-            }`}
-        >
-            {label}
-        </div>
-    );
+  return (
+    <div
+      className={`flex items-center justify-center rounded border text-[10px] font-semibold leading-none ${
+        pressed
+          ? 'bg-yellow-400 text-black border-yellow-300'
+          : 'bg-black/60 text-white/80 border-white/20'
+      }`}
+      style={{ position: 'absolute', left: k.x, top: k.y, width: k.w, height: k.h }}
+    >
+      {k.label}
+    </div>
+  );
+}
+
+// Mouse movement direction: a fading comet trail of recent positions relative to the current one.
+// The head sits at the mouse centre; the tail extends opposite to the direction of motion.
+function MouseMovement({
+  samples,
+  idx,
+  w,
+  h,
+}: {
+  samples: InputSample[];
+  idx: number;
+  w: number;
+  h: number;
+}) {
+  const N = 10;
+  const start = Math.max(0, idx - N);
+  const cur = samples[idx];
+  const raw: { x: number; y: number }[] = [];
+  for (let j = start; j <= idx; j++) {
+    raw.push({ x: samples[j].mx - cur.mx, y: samples[j].my - cur.my });
+  }
+  const PX = 0.05; // overlay px per screen px
+  const scaled = raw.map((p) => ({ x: p.x * PX, y: p.y * PX }));
+  let maxScaled = 0;
+  for (const p of scaled) maxScaled = Math.max(maxScaled, Math.hypot(p.x, p.y));
+  const maxR = Math.min(w, h) / 2 - 3;
+  const k = maxScaled > maxR ? maxR / maxScaled : 1;
+  const moved = maxScaled * k > 2;
+  const cx = w / 2;
+  const cy = h / 2;
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0"
+      width={w}
+      height={h}
+      viewBox={`0 0 ${w} ${h}`}
+    >
+      {moved &&
+        scaled.slice(0, -1).map((p, i) => {
+          const nxt = scaled[i + 1];
+          return (
+            <line
+              key={i}
+              x1={cx + p.x * k}
+              y1={cy + p.y * k}
+              x2={cx + nxt.x * k}
+              y2={cy + nxt.y * k}
+              stroke="#fde047"
+              strokeWidth={2}
+              strokeOpacity={(i + 1) / scaled.length}
+              strokeLinecap="round"
+            />
+          );
+        })}
+      <circle
+        cx={cx}
+        cy={cy}
+        r={moved ? 2.5 : 1.8}
+        fill={moved ? '#fde047' : 'rgba(255,255,255,0.35)'}
+      />
+    </svg>
+  );
 }
 
 function KeyboardMouse({
-    keysDown,
-    mb,
-    wheel,
+  preset,
+  keysDown,
+  mb,
+  wheel,
+  samples,
+  idx,
 }: {
-    keysDown: Set<number>;
-    mb: number;
-    wheel: number;
+  preset: OverlayPreset;
+  keysDown: Set<number>;
+  mb: number;
+  wheel: number;
+  samples: InputSample[];
+  idx: number;
 }) {
-    return (
-        <div className="flex flex-col gap-1.5">
-            <div className="flex flex-col gap-1 bg-black/40 p-1.5 rounded-lg">
-                {KB_LAYOUT.map((row, i) => (
-                    <div key={i} className="flex gap-1">
-                        {row.map((k) => (
-                            <Key key={k.code} label={k.label} wide={k.wide} pressed={keysDown.has(k.code)} />
-                        ))}
-                    </div>
-                ))}
+  const box = presetBox(preset);
+  return (
+    <div className="relative" style={{ width: box.w, height: box.h }}>
+      {preset.keys.map((k, i) => (
+        <KeyDiv key={i} k={k} pressed={keysDown.has(k.vk)} />
+      ))}
+      {preset.mouse && (
+        <div
+          className="absolute"
+          style={{
+            left: preset.mouse.x,
+            top: preset.mouse.y,
+            width: preset.mouse.w,
+            height: preset.mouse.h,
+          }}
+        >
+          <div className="flex h-full w-full">
+            <div
+              className={`flex-1 rounded-l-lg border ${
+                mb & 1 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
+              }`}
+            />
+            <div className="flex w-2 flex-col items-center justify-center">
+              <div
+                className={`h-4 w-1.5 rounded-full ${wheel !== 0 ? 'bg-yellow-400' : 'bg-white/30'}`}
+              />
             </div>
-            {/* Mouse: left/right buttons + wheel */}
-            <div className="flex items-center gap-1 bg-black/40 p-1.5 rounded-lg w-fit">
-                <div
-                    className={`w-7 h-9 rounded-l-lg border ${
-                        mb & 1 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
-                    }`}
-                />
-                <div className="flex flex-col items-center gap-0.5">
-                    <div
-                        className={`w-1.5 h-3 rounded-full ${
-                            wheel !== 0 ? 'bg-yellow-400' : 'bg-white/30'
-                        }`}
-                        title="scroll wheel"
-                    />
-                </div>
-                <div
-                    className={`w-7 h-9 rounded-r-lg border ${
-                        mb & 2 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
-                    }`}
-                />
-                {(mb & 4) > 0 && (
-                    <div className="w-3 h-3 rounded-full bg-yellow-400" title="middle button" />
-                )}
-            </div>
+            <div
+              className={`flex-1 rounded-r-lg border ${
+                mb & 2 ? 'bg-yellow-400 border-yellow-300' : 'bg-black/60 border-white/20'
+              }`}
+            />
+          </div>
+          {(mb & 4) > 0 && (
+            <div className="absolute left-1/2 top-1 h-2 w-2 -translate-x-1/2 rounded-full bg-yellow-400" />
+          )}
+          {preset.mouse.showMovement && (
+            <MouseMovement samples={samples} idx={idx} w={preset.mouse.w} h={preset.mouse.h} />
+          )}
         </div>
-    );
+      )}
+    </div>
+  );
 }
 
-function Stick({
-    x,
-    y,
-    label,
-}: {
-    x: number;
-    y: number;
-    label: string;
-}) {
-    // y is negative=up in XInput; flip for screen.
-    const left = 50 + x * 35;
-    const top = 50 - y * 35;
-    return (
-        <div className="flex flex-col items-center gap-0.5">
-            <div className="relative w-10 h-10 rounded-full bg-black/60 border border-white/20">
-                <div
-                    className="absolute w-3 h-3 rounded-full bg-yellow-400"
-                    style={{ left: `${left}%`, top: `${top}%`, transform: 'translate(-50%, -50%)' }}
-                />
-            </div>
-            <span className="text-[8px] text-white/60">{label}</span>
-        </div>
-    );
+function Stick({ x, y, label }: { x: number; y: number; label: string }) {
+  const left = 50 + x * 35;
+  const top = 50 - y * 35;
+  return (
+    <div className="flex flex-col items-center gap-0.5">
+      <div className="relative h-10 w-10 rounded-full border border-white/20 bg-black/60">
+        <div
+          className="absolute h-3 w-3 rounded-full bg-yellow-400"
+          style={{ left: `${left}%`, top: `${top}%`, transform: 'translate(-50%, -50%)' }}
+        />
+      </div>
+      <span className="text-[8px] text-white/60">{label}</span>
+    </div>
+  );
 }
 
 function PadButton({
-    pressed,
-    children,
-    className = '',
+  pressed,
+  children,
+  className = '',
 }: {
-    pressed: boolean;
-    children: React.ReactNode;
-    className?: string;
+  pressed: boolean;
+  children: React.ReactNode;
+  className?: string;
 }) {
-    return (
-        <div
-            className={`flex items-center justify-center w-6 h-6 rounded-full border text-[10px] font-bold ${
-                pressed ? 'bg-yellow-400 text-black border-yellow-300' : 'bg-black/60 text-white/80 border-white/20'
-            } ${className}`}
-        >
-            {children}
-        </div>
-    );
+  return (
+    <div
+      className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] font-bold ${
+        pressed
+          ? 'bg-yellow-400 text-black border-yellow-300'
+          : 'bg-black/60 text-white/80 border-white/20'
+      } ${className}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 function Gamepad({
-    cb,
-    lt,
-    rt,
-    lx,
-    ly,
-    rx,
-    ry,
-    playstation,
+  cb,
+  lt,
+  rt,
+  lx,
+  ly,
+  rx,
+  ry,
+  playstation,
 }: {
-    cb: number;
-    lt: number;
-    rt: number;
-    lx: number;
-    ly: number;
-    rx: number;
-    ry: number;
-    playstation: boolean;
+  cb: number;
+  lt: number;
+  rt: number;
+  lx: number;
+  ly: number;
+  rx: number;
+  ry: number;
+  playstation: boolean;
 }) {
-    const a = playstation ? '✕' : 'A';
-    const b = playstation ? '○' : 'B';
-    const x = playstation ? '□' : 'X';
-    const y = playstation ? '△' : 'Y';
-    return (
-        <div className="flex flex-col gap-1 bg-black/40 p-2 rounded-lg w-[200px]">
-            {/* Bumpers + triggers */}
-            <div className="flex justify-between">
-                <div className="flex flex-col items-center gap-0.5">
-                    <div
-                        className={`w-12 h-3 rounded text-[8px] text-center ${
-                            lt > 0.05 ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
-                        }`}
-                    >
-                        LT
-                    </div>
-                    <div
-                        className={`w-12 h-3 rounded text-[8px] text-center ${
-                            cb & LSHOULDER ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
-                        }`}
-                    >
-                        LB
-                    </div>
-                </div>
-                <div className="flex flex-col items-center gap-0.5">
-                    <div
-                        className={`w-12 h-3 rounded text-[8px] text-center ${
-                            rt > 0.05 ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
-                        }`}
-                    >
-                        RT
-                    </div>
-                    <div
-                        className={`w-12 h-3 rounded text-[8px] text-center ${
-                            cb & RSHOULDER ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
-                        }`}
-                    >
-                        RB
-                    </div>
-                </div>
-            </div>
-            {/* Main body: left stick, dpad, face buttons, right stick */}
-            <div className="flex justify-between items-center">
-                <div className="flex flex-col gap-1 items-center">
-                    <Stick x={lx} y={ly} label="L" />
-                    {/* D-pad */}
-                    <div className="relative w-12 h-12">
-                        <div
-                            className={`absolute left-1/2 top-0 -translate-x-1/2 w-3 h-4 rounded ${
-                                cb & DPAD_UP ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                            }`}
-                        />
-                        <div
-                            className={`absolute left-1/2 bottom-0 -translate-x-1/2 w-3 h-4 rounded ${
-                                cb & DPAD_DOWN ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                            }`}
-                        />
-                        <div
-                            className={`absolute top-1/2 left-0 -translate-y-1/2 w-4 h-3 rounded ${
-                                cb & DPAD_LEFT ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                            }`}
-                        />
-                        <div
-                            className={`absolute top-1/2 right-0 -translate-y-1/2 w-4 h-3 rounded ${
-                                cb & DPAD_RIGHT ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                            }`}
-                        />
-                    </div>
-                </div>
-                <div className="flex flex-col gap-1 items-center">
-                    {/* Face buttons diamond */}
-                    <div className="relative w-14 h-14">
-                        <PadButton pressed={(cb & BTN_Y) > 0} className="absolute left-1/2 top-0 -translate-x-1/2">
-                            {y}
-                        </PadButton>
-                        <PadButton
-                            pressed={(cb & BTN_A) > 0}
-                            className="absolute left-1/2 bottom-0 -translate-x-1/2"
-                        >
-                            {a}
-                        </PadButton>
-                        <PadButton pressed={(cb & BTN_X) > 0} className="absolute top-1/2 left-0 -translate-y-1/2">
-                            {x}
-                        </PadButton>
-                        <PadButton
-                            pressed={(cb & BTN_B) > 0}
-                            className="absolute top-1/2 right-0 -translate-y-1/2"
-                        >
-                            {b}
-                        </PadButton>
-                    </div>
-                    <Stick x={rx} y={ry} label="R" />
-                </div>
-            </div>
-            {/* Start / Back */}
-            <div className="flex justify-center gap-3">
-                <div
-                    className={`w-4 h-4 rounded-full ${
-                        cb & BTN_BACK ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                    }`}
-                    title="Back"
-                />
-                <div
-                    className={`w-4 h-4 rounded-full ${
-                        cb & BTN_START ? 'bg-yellow-400' : 'bg-black/60 border border-white/20'
-                    }`}
-                    title="Start"
-                />
-            </div>
+  const a = playstation ? '✕' : 'A';
+  const b = playstation ? '○' : 'B';
+  const x = playstation ? '□' : 'X';
+  const y = playstation ? '△' : 'Y';
+  return (
+    <div className="flex w-[200px] flex-col gap-1 rounded-lg bg-black/40 p-2">
+      <div className="flex justify-between">
+        <div className="flex flex-col items-center gap-0.5">
+          <div
+            className={`h-3 w-12 rounded text-center text-[8px] ${
+              lt > 0.05 ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
+            }`}
+          >
+            LT
+          </div>
+          <div
+            className={`h-3 w-12 rounded text-center text-[8px] ${
+              cb & LSHOULDER ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
+            }`}
+          >
+            LB
+          </div>
         </div>
-    );
+        <div className="flex flex-col items-center gap-0.5">
+          <div
+            className={`h-3 w-12 rounded text-center text-[8px] ${
+              rt > 0.05 ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
+            }`}
+          >
+            RT
+          </div>
+          <div
+            className={`h-3 w-12 rounded text-center text-[8px] ${
+              cb & RSHOULDER ? 'bg-yellow-400 text-black' : 'bg-black/60 text-white/60'
+            }`}
+          >
+            RB
+          </div>
+        </div>
+      </div>
+      <div className="flex items-center justify-between">
+        <div className="flex flex-col items-center gap-1">
+          <Stick x={lx} y={ly} label="L" />
+          <div className="relative h-12 w-12">
+            <div
+              className={`absolute left-1/2 top-0 h-4 w-3 -translate-x-1/2 rounded ${
+                cb & DPAD_UP ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+              }`}
+            />
+            <div
+              className={`absolute bottom-0 left-1/2 h-4 w-3 -translate-x-1/2 rounded ${
+                cb & DPAD_DOWN ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+              }`}
+            />
+            <div
+              className={`absolute left-0 top-1/2 h-3 w-4 -translate-y-1/2 rounded ${
+                cb & DPAD_LEFT ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+              }`}
+            />
+            <div
+              className={`absolute right-0 top-1/2 h-3 w-4 -translate-y-1/2 rounded ${
+                cb & DPAD_RIGHT ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+              }`}
+            />
+          </div>
+        </div>
+        <div className="flex flex-col items-center gap-1">
+          <div className="relative h-14 w-14">
+            <PadButton
+              pressed={(cb & BTN_Y) > 0}
+              className="absolute left-1/2 top-0 -translate-x-1/2"
+            >
+              {y}
+            </PadButton>
+            <PadButton
+              pressed={(cb & BTN_A) > 0}
+              className="absolute bottom-0 left-1/2 -translate-x-1/2"
+            >
+              {a}
+            </PadButton>
+            <PadButton
+              pressed={(cb & BTN_X) > 0}
+              className="absolute left-0 top-1/2 -translate-y-1/2"
+            >
+              {x}
+            </PadButton>
+            <PadButton
+              pressed={(cb & BTN_B) > 0}
+              className="absolute right-0 top-1/2 -translate-y-1/2"
+            >
+              {b}
+            </PadButton>
+          </div>
+          <Stick x={rx} y={ry} label="R" />
+        </div>
+      </div>
+      <div className="flex justify-center gap-3">
+        <div
+          className={`h-4 w-4 rounded-full ${
+            cb & BTN_BACK ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+          }`}
+          title="Back"
+        />
+        <div
+          className={`h-4 w-4 rounded-full ${
+            cb & BTN_START ? 'bg-yellow-400' : 'border border-white/20 bg-black/60'
+          }`}
+          title="Start"
+        />
+      </div>
+    </div>
+  );
 }
