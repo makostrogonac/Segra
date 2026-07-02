@@ -124,6 +124,7 @@ internal static class InputCaptureService
         if (nCode == HC_ACTION)
         {
             int vk = Marshal.ReadInt32(lParam); // KBDLLHOOKSTRUCT.vkCode is the first field
+            vk = NormalizeModifierVk(vk); // low-level hook reports L/R-specific codes; presets use generic
             int msg = wParam.ToInt32();
             lock (_stateLock)
             {
@@ -135,6 +136,18 @@ internal static class InputCaptureService
         }
         return CallNextHookEx(_keyboardHook, nCode, wParam, lParam);
     }
+
+    // WH_KEYBOARD_LL reports left/right-specific modifier codes (VK_LSHIFT=160, VK_RSHIFT=161,
+    // VK_LCONTROL=162, VK_RCONTROL=163, VK_LMENU=164, VK_RMENU=165, VK_RWIN=92). Overlay presets
+    // use the generic codes (VK_SHIFT=16, VK_CONTROL=17, VK_MENU=18, VK_LWIN=91), so normalise here.
+    private static int NormalizeModifierVk(int vk) => vk switch
+    {
+        160 or 161 => 16,   // L/R Shift -> Shift
+        162 or 163 => 17,   // L/R Control -> Control
+        164 or 165 => 18,   // L/R Alt -> Alt
+        92 => 91,           // RWin -> LWin
+        _ => vk,
+    };
 
     private static IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam)
     {
