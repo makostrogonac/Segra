@@ -683,12 +683,79 @@ namespace Segra.Backend.App
                 bool createSeparateClips = message.TryGetProperty("OutputMode", out JsonElement outputModeElement)
                     && string.Equals(outputModeElement.GetString(), "separate", StringComparison.OrdinalIgnoreCase);
 
-                await ClipService.CreateClips(segments, createSeparateClips);
+                OverlayBurnConfig? burnConfig = null;
+                if (message.TryGetProperty("BurnInputOverlay", out JsonElement burnEl)
+                    && burnEl.ValueKind == JsonValueKind.True
+                    && message.TryGetProperty("OverlayPrefs", out JsonElement prefsEl))
+                {
+                    burnConfig = ParseOverlayBurnConfig(prefsEl);
+                }
+                await ClipService.CreateClips(segments, createSeparateClips, burnConfig);
             }
             else
             {
                 Log.Information("Segments property not found in CreateClip message.");
             }
+        }
+
+        private static OverlayBurnConfig ParseOverlayBurnConfig(JsonElement e)
+        {
+            var cfg = new OverlayBurnConfig();
+            if (e.TryGetProperty("style", out JsonElement st) && st.ValueKind == JsonValueKind.String)
+            {
+                cfg.Style = st.GetString() switch
+                {
+                    "XboxController" => OverlayBurnStyle.XboxController,
+                    "PlayStationController" => OverlayBurnStyle.PlayStationController,
+                    _ => OverlayBurnStyle.KeyboardMouse
+                };
+            }
+            if (e.TryGetProperty("position", out JsonElement pos) && pos.ValueKind == JsonValueKind.String)
+            {
+                cfg.Position = pos.GetString() switch
+                {
+                    "TopLeft" => OverlayBurnPosition.TopLeft,
+                    "TopRight" => OverlayBurnPosition.TopRight,
+                    "BottomRight" => OverlayBurnPosition.BottomRight,
+                    _ => OverlayBurnPosition.BottomLeft
+                };
+            }
+            if (e.TryGetProperty("scale", out JsonElement sc) && sc.TryGetDouble(out double sv))
+                cfg.Scale = sv;
+            if (e.TryGetProperty("opacity", out JsonElement op) && op.TryGetDouble(out double ov))
+                cfg.Opacity = ov;
+            if (e.TryGetProperty("preset", out JsonElement pr) && pr.ValueKind == JsonValueKind.Object)
+            {
+                var preset = new OverlayBurnPreset();
+                if (pr.TryGetProperty("keys", out JsonElement keysEl) && keysEl.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var k in keysEl.EnumerateArray())
+                    {
+                        preset.Keys.Add(new OverlayBurnKey
+                        {
+                            Vk = k.TryGetProperty("vk", out JsonElement vk) ? vk.GetInt32() : 0,
+                            Label = k.TryGetProperty("label", out JsonElement lb) ? lb.GetString() ?? "" : "",
+                            X = k.TryGetProperty("x", out JsonElement x) && x.TryGetDouble(out double xv) ? xv : 0,
+                            Y = k.TryGetProperty("y", out JsonElement y) && y.TryGetDouble(out double yv) ? yv : 0,
+                            W = k.TryGetProperty("w", out JsonElement w) && w.TryGetDouble(out double wv) ? wv : 36,
+                            H = k.TryGetProperty("h", out JsonElement h) && h.TryGetDouble(out double hv) ? hv : 36,
+                        });
+                    }
+                }
+                if (pr.TryGetProperty("mouse", out JsonElement mEl) && mEl.ValueKind == JsonValueKind.Object)
+                {
+                    preset.Mouse = new OverlayBurnMouse
+                    {
+                        X = mEl.TryGetProperty("x", out JsonElement mx) && mx.TryGetDouble(out double mxv) ? mxv : 0,
+                        Y = mEl.TryGetProperty("y", out JsonElement my) && my.TryGetDouble(out double myv) ? myv : 0,
+                        W = mEl.TryGetProperty("w", out JsonElement mw) && mw.TryGetDouble(out double mwv) ? mwv : 46,
+                        H = mEl.TryGetProperty("h", out JsonElement mh) && mh.TryGetDouble(out double mhv) ? mhv : 116,
+                        ShowMovement = !mEl.TryGetProperty("showMovement", out JsonElement sm) || sm.ValueKind != JsonValueKind.False,
+                    };
+                }
+                cfg.Preset = preset;
+            }
+            return cfg;
         }
 
         private static async Task SetVideoLocationAsync()

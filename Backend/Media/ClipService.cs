@@ -18,10 +18,11 @@ namespace Segra.Backend.Media
         private static readonly HashSet<int> CancelledClipIds = new();
         private static readonly object ProcessLock = new();
 
-        public static async Task CreateClips(List<Segment> segments, bool createSeparateClips = false)
+        public static async Task CreateClips(List<Segment> segments, bool createSeparateClips = false, OverlayBurnConfig? burnConfig = null)
         {
             int id = Guid.NewGuid().GetHashCode();
             List<string> tempClipFiles = new List<string>();
+            List<string> extractedSourcePaths = new List<string>();
             List<Segment> extractedSegments = new List<Segment>();
             List<List<string>?> extractedSegmentTrackNames = new List<List<string>?>();
             List<string> outputFilePaths = new List<string>();
@@ -126,6 +127,7 @@ namespace Segra.Backend.Media
                     tempClipFiles.Add(tempFileName);
                     extractedSegments.Add(segment);
                     extractedSegmentTrackNames.Add(segmentTrackNames);
+                    extractedSourcePaths.Add(inputFilePath);
                     segmentIndex++;
                 }
 
@@ -134,6 +136,56 @@ namespace Segra.Backend.Media
                     Log.Error("No valid clips were extracted.");
                     await MessageService.SendFrontendMessage("ClipProgress", new { id, progress = -1, segments, error = "No valid clips were extracted" });
                     return;
+                }
+
+                // Optional: burn the input overlay into each extracted clip before concat/move.
+                if (burnConfig != null)
+                {
+                    bool anyBurned = false;
+                    for (int i = 0; i < tempClipFiles.Count; i++)
+                    {
+                        var seg = extractedSegments[i];
+                        string inputsJson = Path.ChangeExtension(extractedSourcePaths[i], ".inputs.json");
+                        try
+                        {
+                            bool burned = await InputOverlayBurnInService.BurnAsync(
+                                id,
+                                tempClipFiles[i],
+                                inputsJson,
+                                seg.StartTime,
+                                seg.EndTime,
+                                burnConfig,
+                                p =>
+                                {
+                                    double overall = 95.0 + (i + p) / tempClipFiles.Count * 1.0;
+                                    _ = MessageService.SendFrontendMessage("ClipProgress", new { id, progress = overall, segments });
+                                },
+                                process =>
+                                {
+                                    lock (ProcessLock)
+                                    {
+                                        if (!ActiveFFmpegProcesses.ContainsKey(id))
+                                            ActiveFFmpegProcesses[id] = new List<Process>();
+                                        ActiveFFmpegProcesses[id].Add(process);
+                                        Log.Information($"[Clip {id}] Tracking overlay burn-in FFmpeg process (PID: {process.Id})");
+                                    }
+                                });
+                            if (burned) anyBurned = true;
+                        }
+                        catch (Exception ex)
+                        {
+                            Log.Error($"[Clip {id}] Overlay burn-in failed for segment {i}: {ex.Message}");
+                        }
+                    }
+                    lock (ProcessLock) { ActiveFFmpegProcesses.Remove(id); }
+
+                    if (!anyBurned)
+                    {
+                        _ = MessageService.ShowModal(
+                            "Input overlay not burned",
+                            "No captured input data was found for this recording, so the overlay could not be burned in. Recordings made with this overlay version capture inputs automatically.",
+                            "warning");
+                    }
                 }
 
                 _ = MessageService.SendFrontendMessage("ClipProgress", new { id, progress = 96, segments });

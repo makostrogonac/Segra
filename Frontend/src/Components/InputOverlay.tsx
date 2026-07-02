@@ -45,12 +45,7 @@ const DPAD_UP = 0x0001,
   BTN_X = 0x4000,
   BTN_Y = 0x8000;
 
-const POSITION_CLASS: Record<OverlayPosition, string> = {
-  TopLeft: 'top-2 left-2',
-  TopRight: 'top-2 right-2',
-  BottomLeft: 'bottom-2 left-2',
-  BottomRight: 'bottom-2 right-2',
-};
+const BASELINE = 1280; // overlay is sized relative to a 1280px-wide video; preview and burn-in share this.
 
 const POSITION_ORIGIN: Record<OverlayPosition, string> = {
   TopLeft: 'top left',
@@ -99,6 +94,7 @@ export default function InputOverlay({
   const [currentIdx, setCurrentIdx] = useState(-1);
   const [panelOpen, setPanelOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
+  const [videoW, setVideoW] = useState(1280);
   const rafRef = useRef<number | null>(null);
   const lastUpdateRef = useRef(0);
 
@@ -160,11 +156,44 @@ export default function InputOverlay({
     };
   }, [prefs.enabled, available, samples, videoRef]);
 
+  // Track the video's rendered width so the overlay scales with it (keeps preview and burn-in consistent).
+  useEffect(() => {
+    let ro: ResizeObserver | null = null;
+    let raf = 0;
+    let attempts = 0;
+    const attach = () => {
+      const v = videoRef.current;
+      if (!v) {
+        if (attempts++ < 60) raf = requestAnimationFrame(attach);
+        return;
+      }
+      const update = () => setVideoW(v.clientWidth || 1280);
+      update();
+      ro = new ResizeObserver(update);
+      ro.observe(v);
+    };
+    attach();
+    return () => {
+      if (raf) cancelAnimationFrame(raf);
+      ro?.disconnect();
+    };
+  }, [videoRef]);
+
   if (!available) return null;
 
   const isController = prefs.style === 'XboxController' || prefs.style === 'PlayStationController';
-  const posClass = POSITION_CLASS[prefs.position];
   const origin = POSITION_ORIGIN[prefs.position];
+  const videoScale = videoW / BASELINE;
+  const renderScale = videoScale * prefs.scale;
+  const margin = 8 * videoScale;
+  const posStyle: React.CSSProperties =
+    prefs.position === 'TopLeft'
+      ? { top: margin, left: margin }
+      : prefs.position === 'TopRight'
+        ? { top: margin, right: margin }
+        : prefs.position === 'BottomLeft'
+          ? { bottom: margin, left: margin }
+          : { bottom: margin, right: margin };
   const cur = currentIdx >= 0 ? samples[currentIdx] : null;
   const keysDown = new Set(cur?.k ?? []);
   const mb = cur?.mb ?? 0;
@@ -293,10 +322,11 @@ export default function InputOverlay({
 
       {prefs.enabled && cur && (
         <div
-          className={`pointer-events-none absolute z-10 ${posClass}`}
+          className="pointer-events-none absolute z-10"
           style={{
+            ...posStyle,
             opacity: prefs.opacity,
-            transform: `scale(${prefs.scale})`,
+            transform: `scale(${renderScale})`,
             transformOrigin: origin,
           }}
         >

@@ -13,6 +13,7 @@ import { useUploads } from '../Context/UploadContext';
 import { useModal } from '../Context/ModalContext';
 import UploadModal from '../Components/UploadModal';
 import InputOverlay from '../Components/InputOverlay';
+import { loadPrefs } from '../Components/inputOverlayPresets';
 import type { LucideIcon } from 'lucide-react';
 import { Icon } from 'lucide-react';
 import { crosshair2Dot, soccerBall } from '@lucide/lab';
@@ -392,6 +393,12 @@ export default function VideoComponent({ video }: { video: Content }) {
   useEffect(() => {
     localStorage.setItem('segra-clip-output-mode', clipOutputMode);
   }, [clipOutputMode]);
+  const [burnInputOverlay, setBurnInputOverlay] = useState(
+    () => localStorage.getItem('segra-burn-input-overlay') === 'true',
+  );
+  useEffect(() => {
+    localStorage.setItem('segra-burn-input-overlay', burnInputOverlay.toString());
+  }, [burnInputOverlay]);
   const [playbackRate, setPlaybackRate] = useState(() => {
     const saved = localStorage.getItem('segra-playbackRate');
     return saved ? parseFloat(saved) : 1;
@@ -1155,6 +1162,8 @@ export default function VideoComponent({ video }: { video: Content }) {
 
     const params = {
       OutputMode: clipOutputMode,
+      BurnInputOverlay: burnInputOverlay,
+      OverlayPrefs: loadPrefs(),
       Segments: segments.map((s) => ({
         id: s.id,
         type: s.type,
@@ -2374,6 +2383,18 @@ export default function VideoComponent({ video }: { video: Content }) {
                   className="checkbox checkbox-sm checkbox-accent"
                 />
                 <span className="ml-2 text-sm">Auto-Clear Segments</span>
+              </label>
+              <label
+                className="flex items-center cursor-pointer tooltip"
+                data-tip="Burn the input overlay permanently into the exported clip. Slower; requires input data captured during recording."
+              >
+                <input
+                  type="checkbox"
+                  checked={burnInputOverlay}
+                  onChange={(e) => setBurnInputOverlay(e.target.checked)}
+                  className="checkbox checkbox-sm checkbox-accent"
+                />
+                <span className="ml-2 text-sm">Burn Input Overlay</span>
               </label>
             </div>
             <div className="join flex mb-3 mr-3">

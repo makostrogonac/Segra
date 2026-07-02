@@ -461,6 +461,11 @@ namespace Segra.Backend.Media
             @"^\s*Stream #\d+:\d+[^\n]*?:\s*(\w+):",
             RegexOptions.Compiled);
 
+        // Video dimensions and framerate as ffmpeg reports them in the stream line, e.g.
+        // "... 1920x1080 ..., 60 fps, 60 tbr, ...". Used by the overlay burn-in to size/render frames.
+        private static readonly Regex _videoDimRegex = new(@"(\d{2,5})x(\d{2,5})", RegexOptions.Compiled);
+        private static readonly Regex _videoFpsRegex = new(@"(\d+(?:\.\d+)?)\s*fps", RegexOptions.Compiled);
+
         private static readonly Regex _metadataTagRegex = new(
             @"^\s+(\w+)\s*:\s*(.+?)\s*$",
             RegexOptions.Compiled);
@@ -544,6 +549,26 @@ namespace Segra.Backend.Media
             Flush();
 
             return tracks.Count >= 2 ? tracks : null;
+        }
+
+        /// <summary>
+        /// Extracts video width, height and framerate from ffmpeg metadata output.
+        /// Returns zeros for anything that cannot be parsed.
+        /// </summary>
+        public static (int Width, int Height, double Fps) ExtractVideoInfo(string ffmpegOutput)
+        {
+            int width = 0, height = 0;
+            double fps = 0;
+            if (!string.IsNullOrEmpty(ffmpegOutput))
+            {
+                var dm = _videoDimRegex.Match(ffmpegOutput);
+                if (dm.Success && int.TryParse(dm.Groups[1].Value, out width) && int.TryParse(dm.Groups[2].Value, out height))
+                { /* resolved */ }
+                var fm = _videoFpsRegex.Match(ffmpegOutput);
+                if (fm.Success)
+                    double.TryParse(fm.Groups[1].Value, CultureInfo.InvariantCulture, out fps);
+            }
+            return (width, height, fps);
         }
 
         /// <summary>
