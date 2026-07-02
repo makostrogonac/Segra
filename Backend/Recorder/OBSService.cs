@@ -2890,6 +2890,13 @@ namespace Segra.Backend.Recorder
             string pluginPath = Path.Combine(currentDirectory, "obs-plugins", "64bit", "input-overlay.dll");
             string presetCheckPath = Path.Combine(GetInputOverlayPresetRoot(), "presets", "qwerty", "qwerty.json");
 
+            // input-overlay depends on SDL2.dll, which ships in obs-plugins/64bit. OBS loads plugins via
+            // LoadLibrary, which resolves a plugin's dependencies against the app root (Segra.exe's dir),
+            // not the plugin's own folder, so SDL2 must sit next to Segra.exe or the module fails to open
+            // (LoadLibrary error 126: "The specified module could not be found"). Run before the early
+            // return so already-extracted installs get fixed too.
+            EnsureInputOverlaySdl2(currentDirectory);
+
             if (File.Exists(pluginPath) && File.Exists(presetCheckPath))
                 return;
 
@@ -2906,6 +2913,7 @@ namespace Segra.Backend.Recorder
                     string pluginZip = Path.Combine(appDataDir, $"input-overlay-{InputOverlayVersion}-windows-x64.zip");
                     await DownloadFileAsync(httpClient, InputOverlayPluginUrl, pluginZip);
                     ZipFile.ExtractToDirectory(pluginZip, currentDirectory, true);
+                    EnsureInputOverlaySdl2(currentDirectory);
                     Log.Information($"Installed Input Overlay OBS plugin {InputOverlayVersion}");
                 }
 
@@ -2922,6 +2930,25 @@ namespace Segra.Backend.Recorder
             catch (Exception ex)
             {
                 Log.Warning($"Input Overlay plugin install failed; recordings will continue without it: {ex.Message}");
+            }
+        }
+
+        private static void EnsureInputOverlaySdl2(string currentDirectory)
+        {
+            // ponytail: copy-if-missing; the plugin version is pinned so SDL2 won't skew. If the pinned
+            // version is ever bumped, delete the root SDL2.dll to force a refresh.
+            string sdl2Source = Path.Combine(currentDirectory, "obs-plugins", "64bit", "SDL2.dll");
+            string sdl2Dest = Path.Combine(currentDirectory, "SDL2.dll");
+            if (!File.Exists(sdl2Source) || File.Exists(sdl2Dest))
+                return;
+            try
+            {
+                File.Copy(sdl2Source, sdl2Dest, overwrite: true);
+                Log.Information("Copied SDL2.dll next to Segra.exe for input-overlay");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not copy SDL2.dll for input-overlay: {ex.Message}");
             }
         }
 
