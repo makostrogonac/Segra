@@ -7,9 +7,6 @@ on:
         description: Version to release, for example 1.6.3
         required: true
         type: string
-  push:
-    tags:
-      - 'v*'
 
 permissions:
   contents: write
@@ -33,7 +30,7 @@ jobs:
       - name: Set version
         shell: pwsh
         run: |
-          $version = if ('${{ github.ref_type }}' -eq 'tag') { '${{ github.ref_name }}' -replace '^v', '' } else { '${{ inputs.version }}' -replace '^v', '' }
+          $version = '${{ inputs.version }}' -replace '^v', ''
           if (-not $version) { throw 'Missing version' }
           "VERSION=$version" >> $env:GITHUB_ENV
           "TAG=v$version" >> $env:GITHUB_ENV
@@ -62,6 +59,14 @@ jobs:
         run: |
           dotnet tool install --tool-path .\.tools vpk --version 1.2.0
           .\.tools\vpk.exe pack -u Segra -v $env:VERSION -p .\publish -e Segra.exe -o .\output --packTitle "Segra" --noPortable -i .\Resources\icon.ico -s .\Resources\splash.png --splashProgressColor "#fecb00" --framework webview2
+
+      - name: Push release tag
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -f $env:TAG
+          git push --force origin $env:TAG
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
