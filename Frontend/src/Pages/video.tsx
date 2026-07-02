@@ -12,6 +12,7 @@ import { useSegments } from '../Context/SegmentsContext';
 import { useUploads } from '../Context/UploadContext';
 import { useModal } from '../Context/ModalContext';
 import UploadModal from '../Components/UploadModal';
+import InputOverlay from '../Components/InputOverlay';
 import type { LucideIcon } from 'lucide-react';
 import { Icon } from 'lucide-react';
 import { crosshair2Dot, soccerBall } from '@lucide/lab';
@@ -1655,6 +1656,7 @@ export default function VideoComponent({ video }: { video: Content }) {
                   cursor: videoScale > 1 && isPanning ? 'grabbing' : undefined,
                 }}
               />
+              <InputOverlay videoRef={videoRef} filePath={video.filePath} />
             </div>
 
             <div
