@@ -97,6 +97,15 @@ namespace Segra.Backend.Recorder
         // Periodic low-disk-space monitor while recording
         private static System.Threading.Timer? _diskSpaceMonitorTimer = null;
         private const int DiskSpaceCheckIntervalMs = 60000; // 1 minute
+
+        private static System.Threading.Timer? _droppedFrameMonitorTimer = null;
+        private const int DroppedFrameCheckIntervalMs = 5000;
+        // ponytail: fixed threshold; make it configurable only if users complain.
+        private const uint DroppedFrameWarningThreshold = 30;
+        private static uint _droppedFrameBaselineLagged;
+        private static uint _droppedFrameBaselineSkipped;
+        private static int _droppedFrameBaselineOutputDropped;
+        private static int _droppedFrameWarningSent;
         // Quality-based rate controls (CRF/CQP) have no bitrate cap, so assume a high worst case when sizing headroom
         private const int QualityModeAssumedMbps = 150;
 
@@ -1151,6 +1160,7 @@ namespace Segra.Backend.Recorder
             NotifyIconService.SetNotifyIconStatus(NotifyIconState.Recording);
 
             StartDiskSpaceMonitor();
+            StartDroppedFrameMonitor();
 
             Log.Information("Recording started: " + videoOutputPath);
             GeneralUtils.SetProcessPriority(ProcessPriorityClass.High);
@@ -1544,6 +1554,7 @@ namespace Segra.Backend.Recorder
 
                 StopGameCaptureHookTimeoutTimer();
                 StopDiskSpaceMonitor();
+                StopDroppedFrameMonitor();
 
                 // Use the same effective recording mode that StartRecording used (per-game override aware),
                 // falling back to the global setting if no recording is active.
@@ -2375,6 +2386,81 @@ namespace Segra.Backend.Recorder
             }
         }
 
+        private static void StartDroppedFrameMonitor()
+        {
+            try
+            {
+                StopDroppedFrameMonitor();
+
+                var stats = Obs.GetPerformanceStats();
+                _droppedFrameBaselineLagged = stats.LaggedFrames;
+                _droppedFrameBaselineSkipped = stats.SkippedFrames;
+                _droppedFrameBaselineOutputDropped = GetOutputDroppedFrames();
+                _droppedFrameWarningSent = 0;
+
+                _droppedFrameMonitorTimer = new System.Threading.Timer(
+                    OnDroppedFrameCheck,
+                    null,
+                    DroppedFrameCheckIntervalMs,
+                    DroppedFrameCheckIntervalMs
+                );
+
+                Log.Information($"Started dropped-frame monitor (every {DroppedFrameCheckIntervalMs / 1000}s)");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Could not start dropped-frame monitor: {ex.Message}");
+            }
+        }
+
+        private static void StopDroppedFrameMonitor()
+        {
+            if (_droppedFrameMonitorTimer != null)
+            {
+                _droppedFrameMonitorTimer.Dispose();
+                _droppedFrameMonitorTimer = null;
+                Log.Information("Stopped dropped-frame monitor");
+            }
+        }
+
+        private static void OnDroppedFrameCheck(object? state)
+        {
+            try
+            {
+                if (_isStoppingOrStopped || (_output?.IsActive != true && _bufferOutput?.IsActive != true))
+                    return;
+
+                var stats = Obs.GetPerformanceStats();
+                uint lagged = CounterDelta(stats.LaggedFrames, _droppedFrameBaselineLagged);
+                uint skipped = CounterDelta(stats.SkippedFrames, _droppedFrameBaselineSkipped);
+                int outputDropped = Math.Max(0, GetOutputDroppedFrames() - _droppedFrameBaselineOutputDropped);
+                uint total = lagged + skipped + (uint)outputDropped;
+
+                if (total < DroppedFrameWarningThreshold)
+                    return;
+
+                if (Interlocked.Exchange(ref _droppedFrameWarningSent, 1) != 0)
+                    return;
+
+                Log.Error($"Dropped frames detected while recording: render lagged={lagged}, encoding skipped={skipped}, output dropped={outputDropped}");
+                _ = Task.Run(async () =>
+                {
+                    await ShowModal("Recording is dropping frames",
+                        "Segra detected dropped frames while recording. Lower the resolution, frame rate, bitrate, or switch to a faster encoder before recording again.",
+                        "error");
+                    _ = Task.Run(() => PlaySound("error"));
+                });
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Dropped-frame monitor check failed: {ex.Message}");
+            }
+        }
+
+        private static uint CounterDelta(uint current, uint baseline) => current >= baseline ? current - baseline : current;
+
+        private static int GetOutputDroppedFrames() => (_output?.FramesDropped ?? 0) + (_bufferOutput?.FramesDropped ?? 0);
+
         // Stops the recording when the drive runs low on space, while OBS can still finalize the file
         // cleanly. Runs on a thread pool thread (System.Threading.Timer).
         private static void OnDiskSpaceCheck(object? state)
@@ -2494,6 +2580,8 @@ namespace Segra.Backend.Recorder
         /// </summary>
         public static void DisposeOutput()
         {
+            StopDroppedFrameMonitor();
+
             _replaySavedConnection?.Dispose();
             _replaySavedConnection = null;
 
