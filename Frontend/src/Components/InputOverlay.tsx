@@ -344,19 +344,28 @@ export default function InputOverlay({
               />
             </div>
             <div>
-              <div className="flex justify-between text-xs text-white/70">
+              <div className="flex items-center justify-between gap-2 text-xs text-white/70">
                 <span>Sync</span>
-                <span>
-                  {prefs.syncOffsetMs > 0 ? '+' : ''}
-                  {prefs.syncOffsetMs} ms
-                </span>
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    step={1}
+                    value={prefs.syncOffsetMs}
+                    onChange={(e) => {
+                      const n = Number(e.target.value);
+                      if (Number.isFinite(n)) setPref({ syncOffsetMs: n });
+                    }}
+                    className="w-20 rounded border border-white/10 bg-black/40 px-1 py-0.5 text-right text-xs text-white"
+                  />
+                  <span>ms</span>
+                </div>
               </div>
               <input
                 type="range"
                 min={-200}
                 max={200}
                 step={5}
-                value={prefs.syncOffsetMs}
+                value={Math.max(-200, Math.min(prefs.syncOffsetMs, 200))}
                 onChange={(e) => setPref({ syncOffsetMs: Number(e.target.value) })}
                 className="range range-xs range-primary"
               />
