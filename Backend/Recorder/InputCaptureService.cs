@@ -9,13 +9,13 @@ using Serilog;
 namespace Segra.Backend.Recorder;
 
 // Records keyboard/mouse/controller input during a session recording as NDJSON snapshots
-// (~30Hz) synced to recording start, so the editor can render a toggleable overlay afterwards.
+// (~60Hz) synced to recording start, so the editor can render a toggleable overlay afterwards.
 // ponytail: XInput only in v1 (Xbox + DS4Windows-emulated DualSense). Native DualSense needs
 // Windows.Gaming.Input; add it if a user runs a pad outside XInput mode. Mouse movement is
 // captured as absolute screen position; the overlay can ignore it and use buttons/wheel only.
 internal static class InputCaptureService
 {
-    private const int SnapshotIntervalMs = 33;   // ~30Hz
+    private const int SnapshotIntervalMs = 16;   // ~60Hz (1-frame granularity at 60fps)
     private const int FlushIntervalMs = 1000;
 
     private static Thread? _hookThread;
@@ -169,7 +169,7 @@ internal static class InputCaptureService
                     case WM_MBUTTONDOWN: _mouseButtons |= 4; break;
                     case WM_MBUTTONUP:   _mouseButtons &= ~4; break;
                     case WM_XBUTTONDOWN: _mouseButtons |= (hi == 1) ? 8 : 16; break;
-                    case WM_XBUTTONUP:   _mouseButtons &= ~24; break;
+                    case WM_XBUTTONUP:   _mouseButtons &= ~(hi == 1 ? 8 : 16); break;
                     case WM_MOUSEWHEEL:  _wheelDelta += hi; break;
                 }
             }

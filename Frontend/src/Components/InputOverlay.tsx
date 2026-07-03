@@ -85,7 +85,6 @@ export default function InputOverlay({
   const [videoH, setVideoH] = useState(720);
   const [natural, setNatural] = useState({ w: 200, h: 150 });
   const rafRef = useRef<number | null>(null);
-  const lastUpdateRef = useRef(0);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const roRef = useRef<ResizeObserver | null>(null);
   const dragRef = useRef<{
@@ -155,12 +154,8 @@ export default function InputOverlay({
       return;
     }
     const loop = () => {
-      const now = performance.now();
-      if (now - lastUpdateRef.current >= 33) {
-        lastUpdateRef.current = now;
-        const v = videoRef.current;
-        if (v && samples.length) setCurrentIdx(findSampleIndex(samples, v.currentTime * 1000));
-      }
+      const v = videoRef.current;
+      if (v && samples.length) setCurrentIdx(findSampleIndex(samples, v.currentTime * 1000));
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
@@ -566,15 +561,30 @@ function KeyboardMouse({
                 background: wheel !== 0 || mb & 4 ? '#fde047' : 'rgba(255,255,255,0.25)',
               }}
             />
-            <div
-              className="absolute -left-[3px] top-[28%] h-2 w-1.5 rounded-l-sm"
-              style={{ background: mb & 8 ? '#fde047' : 'rgba(255,255,255,0.18)' }}
-            />
-            <div
-              className="absolute -left-[3px] top-[44%] h-2 w-1.5 rounded-l-sm"
-              style={{ background: mb & 16 ? '#fde047' : 'rgba(255,255,255,0.18)' }}
-            />
           </div>
+          {/* Side buttons X1 (mb&8) / X2 (mb&16) — outside the overflow-hidden body so they show */}
+          <div
+            className="absolute rounded-l-sm border border-white/10"
+            style={{
+              left: -4,
+              top: '26%',
+              width: 8,
+              height: 12,
+              background:
+                mb & 8 ? 'linear-gradient(180deg,#fde047,#f59e0b)' : 'rgba(255,255,255,0.18)',
+            }}
+          />
+          <div
+            className="absolute rounded-l-sm border border-white/10"
+            style={{
+              left: -4,
+              top: '44%',
+              width: 8,
+              height: 12,
+              background:
+                mb & 16 ? 'linear-gradient(180deg,#fde047,#f59e0b)' : 'rgba(255,255,255,0.18)',
+            }}
+          />
           {preset.mouse.showMovement && (
             <MouseMovement samples={samples} idx={idx} w={preset.mouse.w} h={preset.mouse.h} />
           )}

@@ -344,12 +344,12 @@ public static class InputOverlayRenderer
         using (var wheelBrush = new SolidBrush(wheelColor))
             g.FillRectangle(wheelBrush, x + halfW - wheelW / 2, y + h * 0.16f, wheelW, wheelH);
 
-        // Side buttons X1 (mb&8) / X2 (mb&16)
-        float sideW = (float)(1.5 * rs);
-        float sideH = (float)(2 * rs);
-        float sideX = x - (float)(3 * rs);
+        // Side buttons X1 (mb&8) / X2 (mb&16) — match the preview: 8x12 overlay-px on the left edge.
+        float sideW = (float)(8 * rs);
+        float sideH = (float)(12 * rs);
+        float sideX = x - (float)(4 * rs);
         using (var b1 = new SolidBrush((mb & 8) != 0 ? PressedTop : SideIdle))
-            g.FillRectangle(b1, sideX, y + h * 0.28f, sideW, sideH);
+            g.FillRectangle(b1, sideX, y + h * 0.26f, sideW, sideH);
         using (var b2 = new SolidBrush((mb & 16) != 0 ? PressedTop : SideIdle))
             g.FillRectangle(b2, sideX, y + h * 0.44f, sideW, sideH);
 
