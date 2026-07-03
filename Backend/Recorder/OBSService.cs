@@ -1157,23 +1157,7 @@ namespace Segra.Backend.Recorder
 
             Log.Information("Recording started: " + videoOutputPath);
             if (!string.IsNullOrEmpty(videoOutputPath))
-            {
-                // Start input capture once the OBS output is actually active (encoder init can take a
-                // few hundred ms), so input timestamps line up with the first video frame and the
-                // overlay stays in sync. Runs off-thread so StartRecording isn't blocked.
-                var capPath = videoOutputPath;
-                var capStart = startTime ?? DateTime.Now;
-                _ = Task.Run(async () =>
-                {
-                    for (int i = 0; i < 100; i++)
-                    {
-                        if (_output?.IsActive == true || _bufferOutput?.IsActive == true)
-                            break;
-                        await Task.Delay(10);
-                    }
-                    InputCaptureService.Start(capPath, capStart);
-                });
-            }
+                InputCaptureService.Start(videoOutputPath, startTime ?? DateTime.Now);
             GeneralUtils.SetProcessPriority(ProcessPriorityClass.High);
             if (!isReplayBufferMode)
             {
