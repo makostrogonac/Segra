@@ -34,6 +34,7 @@ export interface InputOverlayPrefs {
   posY: number; // 0..1 fraction of (videoH - overlayH); 0 = top edge, 1 = bottom edge
   scale: number;
   opacity: number;
+  syncOffsetMs: number; // + delays the overlay (fixes "early"), - advances it (fixes "late")
   preset: OverlayPreset;
 }
 
@@ -422,6 +423,7 @@ export const DEFAULT_PREFS: InputOverlayPrefs = {
   posY: 1,
   scale: 1,
   opacity: 1,
+  syncOffsetMs: 0,
   preset: SIXTY,
 };
 

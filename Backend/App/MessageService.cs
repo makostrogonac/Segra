@@ -718,6 +718,8 @@ namespace Segra.Backend.App
                 cfg.Scale = sv;
             if (e.TryGetProperty("opacity", out JsonElement op) && op.TryGetDouble(out double ov))
                 cfg.Opacity = ov;
+            if (e.TryGetProperty("syncOffsetMs", out JsonElement so) && so.TryGetDouble(out double sov))
+                cfg.SyncOffsetMs = sov;
             if (e.TryGetProperty("preset", out JsonElement pr) && pr.ValueKind == JsonValueKind.Object)
             {
                 var preset = new OverlayBurnPreset();

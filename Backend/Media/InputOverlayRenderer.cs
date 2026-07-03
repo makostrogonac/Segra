@@ -45,6 +45,7 @@ public class OverlayBurnConfig
     public double PosY { get; set; } = 1;
     public double Scale { get; set; } = 1;
     public double Opacity { get; set; } = 1;
+    public double SyncOffsetMs { get; set; } = 0;
     public OverlayBurnPreset Preset { get; set; } = new();
 }
 

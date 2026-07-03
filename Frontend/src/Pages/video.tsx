@@ -29,6 +29,8 @@ import {
   Play,
   RotateCcw,
   RotateCw,
+  StepBack,
+  StepForward,
   Upload,
   Volume2,
   VolumeX,
@@ -588,6 +590,20 @@ export default function VideoComponent({ video }: { video: Content }) {
         return;
       }
 
+      // , / . step one frame back/forward (fine sync tuning)
+      if ((e.key === ',' || e.key === '<') && !isTyping) {
+        e.preventDefault();
+        showControlsTemporarily();
+        stepFrame(-1);
+        return;
+      }
+      if ((e.key === '.' || e.key === '>') && !isTyping) {
+        e.preventDefault();
+        showControlsTemporarily();
+        stepFrame(1);
+        return;
+      }
+
       // Volume up/down (5% steps, allow holding)
       if ((e.key === 'ArrowUp' || e.code === 'ArrowUp') && !isTyping) {
         e.preventDefault();
@@ -928,6 +944,17 @@ export default function VideoComponent({ video }: { video: Content }) {
       const newTime = videoRef.current.currentTime + seconds;
       videoRef.current.currentTime = Math.max(0, Math.min(newTime, videoRef.current.duration));
     }
+  };
+
+  // Step one frame back/forward — used to tune the input overlay sync offset precisely.
+  const stepFrame = (direction: number) => {
+    const vid = videoRef.current;
+    if (!vid) return;
+    if (!vid.paused) vid.pause();
+    const fps = settings.frameRate && settings.frameRate > 0 ? settings.frameRate : 60;
+    const t = Math.max(0, Math.min(vid.currentTime + direction / fps, vid.duration));
+    vid.currentTime = t;
+    setCurrentTime(t);
   };
 
   const setPlayerVolume = (vol: number) => {
@@ -1696,11 +1723,27 @@ export default function VideoComponent({ video }: { video: Content }) {
               <div className="flex items-center justify-between px-3">
                 <div className="flex items-center gap-3">
                   <button
+                    onClick={() => stepFrame(-1)}
+                    className="text-white transition-colors cursor-pointer hover:text-accent"
+                    aria-label="Previous frame"
+                    title="Previous frame (,)"
+                  >
+                    <StepBack className="w-4 h-4" />
+                  </button>
+                  <button
                     onClick={handlePlayPause}
                     className="text-white transition-colors cursor-pointer hover:text-accent"
                     aria-label={isPlaying ? 'Pause' : 'Play'}
                   >
                     {isPlaying ? <Pause className="w-5 h-5" /> : <Play className="w-5 h-5" />}
+                  </button>
+                  <button
+                    onClick={() => stepFrame(1)}
+                    className="text-white transition-colors cursor-pointer hover:text-accent"
+                    aria-label="Next frame"
+                    title="Next frame (.)"
+                  >
+                    <StepForward className="w-4 h-4" />
                   </button>
 
                   <div className="flex items-center group">

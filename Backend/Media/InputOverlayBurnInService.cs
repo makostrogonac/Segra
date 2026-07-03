@@ -57,7 +57,7 @@ public static class InputOverlayBurnInService
             for (int i = 0; i < frameCount; i++)
             {
                 double tMs = (segStart + i / fps) * 1000.0;
-                int idx = InputOverlayRenderer.FindSampleIndex(samples, tMs);
+                int idx = InputOverlayRenderer.FindSampleIndex(samples, tMs + cfg.SyncOffsetMs);
                 InputSample? sample = idx >= 0 ? samples[idx] : null;
                 InputOverlayRenderer.DrawFrame(frame, scratch, cfg, sample, samples, idx);
                 frame.Save(Path.Combine(tempDir, $"{i:D6}.png"), ImageFormat.Png);

@@ -155,14 +155,15 @@ export default function InputOverlay({
     }
     const loop = () => {
       const v = videoRef.current;
-      if (v && samples.length) setCurrentIdx(findSampleIndex(samples, v.currentTime * 1000));
+      if (v && samples.length)
+        setCurrentIdx(findSampleIndex(samples, v.currentTime * 1000 + prefs.syncOffsetMs));
       rafRef.current = requestAnimationFrame(loop);
     };
     rafRef.current = requestAnimationFrame(loop);
     return () => {
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
     };
-  }, [prefs.enabled, available, samples, videoRef]);
+  }, [prefs.enabled, prefs.syncOffsetMs, available, samples, videoRef]);
 
   // Track the video's rendered size so the overlay scales with it (keeps preview and burn-in consistent).
   useEffect(() => {
@@ -341,6 +342,25 @@ export default function InputOverlay({
                 onChange={(e) => setPref({ opacity: Number(e.target.value) })}
                 className="range range-xs range-primary"
               />
+            </div>
+            <div>
+              <div className="flex justify-between text-xs text-white/70">
+                <span>Sync</span>
+                <span>
+                  {prefs.syncOffsetMs > 0 ? '+' : ''}
+                  {prefs.syncOffsetMs} ms
+                </span>
+              </div>
+              <input
+                type="range"
+                min={-200}
+                max={200}
+                step={5}
+                value={prefs.syncOffsetMs}
+                onChange={(e) => setPref({ syncOffsetMs: Number(e.target.value) })}
+                className="range range-xs range-primary"
+              />
+              <div className="text-[10px] text-white/40">+ if overlay is early, − if late</div>
             </div>
             {!isController && (
               <button
