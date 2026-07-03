@@ -81,6 +81,7 @@ namespace Segra.Backend.Core.Models
         private bool _removeOriginalAfterCompression = false;
         private bool _discardSessionsWithoutBookmarks = false;
         private bool _disableWindowsGameMode = false;
+        private bool _droppedFrameWarningEnabled = true;
         private GameIntegrations _gameIntegrations = new GameIntegrations();
 
         private List<MenuItemPreference> _menuItems = KnownMenuItemIds
@@ -224,6 +225,16 @@ namespace Segra.Backend.Core.Models
             set
             {
                 _enableHdr = value;
+            }
+        }
+
+        [JsonPropertyName("droppedFrameWarningEnabled")]
+        public bool DroppedFrameWarningEnabled
+        {
+            get => _droppedFrameWarningEnabled;
+            set
+            {
+                _droppedFrameWarningEnabled = value;
             }
         }
 

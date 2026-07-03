@@ -12,7 +12,6 @@ namespace Segra.Backend.Media;
 // (BASELINE=1280), so preview and burn-in stay consistent regardless of editor size.
 
 public enum OverlayBurnStyle { KeyboardMouse, XboxController, PlayStationController }
-public enum OverlayBurnPosition { TopLeft, TopRight, BottomLeft, BottomRight }
 
 public class OverlayBurnKey
 {
@@ -42,7 +41,8 @@ public class OverlayBurnPreset
 public class OverlayBurnConfig
 {
     public OverlayBurnStyle Style { get; set; } = OverlayBurnStyle.KeyboardMouse;
-    public OverlayBurnPosition Position { get; set; } = OverlayBurnPosition.BottomLeft;
+    public double PosX { get; set; } = 0;
+    public double PosY { get; set; } = 1;
     public double Scale { get; set; } = 1;
     public double Opacity { get; set; } = 1;
     public OverlayBurnPreset Preset { get; set; } = new();
@@ -158,14 +158,13 @@ public static class InputOverlayRenderer
         int W = frame.Width, H = frame.Height;
         double videoScale = W / BASELINE;
         double renderScale = videoScale * Math.Max(0.05, cfg.Scale);
-        double margin = 8.0 * videoScale;
 
         if (cfg.Opacity >= 0.999)
         {
             using var g = Graphics.FromImage(frame);
             SetupGraphics(g);
             g.Clear(Color.Transparent);
-            DrawOverlay(g, cfg, sample, samples, idx, W, H, renderScale, margin);
+            DrawOverlay(g, cfg, sample, samples, idx, W, H, renderScale);
         }
         else
         {
@@ -179,7 +178,7 @@ public static class InputOverlayRenderer
                 {
                     SetupGraphics(g);
                     g.Clear(Color.Transparent);
-                    DrawOverlay(g, cfg, sample, samples, idx, W, H, renderScale, margin);
+                    DrawOverlay(g, cfg, sample, samples, idx, W, H, renderScale);
                 }
                 using var g2 = Graphics.FromImage(frame);
                 SetupGraphics(g2);
@@ -204,16 +203,15 @@ public static class InputOverlayRenderer
         g.InterpolationMode = InterpolationMode.HighQualityBicubic;
     }
 
-    private static (double ox, double oy) CornerOffset(OverlayBurnPosition pos, int canvasW, int canvasH, double boxW, double boxH, double margin)
+    // Free-form position: posX/posY are fractions of (canvas - box), so 0 = flush left/top, 1 = flush
+    // right/bottom. Mirrors Frontend/src/Components/InputOverlay.tsx so burn-in matches the preview.
+    private static (double ox, double oy) PositionOffset(double posX, double posY, int canvasW, int canvasH, double boxW, double boxH)
     {
-        return pos switch
-        {
-            OverlayBurnPosition.TopLeft => (margin, margin),
-            OverlayBurnPosition.TopRight => (canvasW - margin - boxW, margin),
-            OverlayBurnPosition.BottomLeft => (margin, canvasH - margin - boxH),
-            OverlayBurnPosition.BottomRight => (canvasW - margin - boxW, canvasH - margin - boxH),
-            _ => (margin, margin),
-        };
+        double denomX = canvasW - boxW;
+        double denomY = canvasH - boxH;
+        double ox = denomX > 0 ? posX * denomX : denomX / 2;
+        double oy = denomY > 0 ? posY * denomY : denomY / 2;
+        return (ox, oy);
     }
 
     private static (double w, double h) PresetBox(OverlayBurnPreset preset)
@@ -232,18 +230,18 @@ public static class InputOverlayRenderer
         return (maxX + 4, maxY + 4);
     }
 
-    private static void DrawOverlay(Graphics g, OverlayBurnConfig cfg, InputSample? sample, List<InputSample> samples, int idx, int W, int H, double rs, double margin)
+    private static void DrawOverlay(Graphics g, OverlayBurnConfig cfg, InputSample? sample, List<InputSample> samples, int idx, int W, int H, double rs)
     {
         if (cfg.Style == OverlayBurnStyle.KeyboardMouse)
         {
             var box = PresetBox(cfg.Preset);
-            var (ox, oy) = CornerOffset(cfg.Position, W, H, box.w * rs, box.h * rs, margin);
+            var (ox, oy) = PositionOffset(cfg.PosX, cfg.PosY, W, H, box.w * rs, box.h * rs);
             DrawKeyboardMouse(g, cfg.Preset, sample, samples, idx, ox, oy, rs);
         }
         else
         {
             const double gw = 200, gh = 170;
-            var (ox, oy) = CornerOffset(cfg.Position, W, H, gw * rs, gh * rs, margin);
+            var (ox, oy) = PositionOffset(cfg.PosX, cfg.PosY, W, H, gw * rs, gh * rs);
             DrawGamepad(g, sample, ox, oy, rs, cfg.Style == OverlayBurnStyle.PlayStationController);
         }
     }

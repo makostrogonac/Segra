@@ -26,12 +26,12 @@ export interface OverlayPreset {
 }
 
 export type OverlayStyle = 'KeyboardMouse' | 'XboxController' | 'PlayStationController';
-export type OverlayPosition = 'TopLeft' | 'TopRight' | 'BottomLeft' | 'BottomRight';
 
 export interface InputOverlayPrefs {
   enabled: boolean;
   style: OverlayStyle;
-  position: OverlayPosition;
+  posX: number; // 0..1 fraction of (videoW - overlayW); 0 = left edge, 1 = right edge
+  posY: number; // 0..1 fraction of (videoH - overlayH); 0 = top edge, 1 = bottom edge
   scale: number;
   opacity: number;
   preset: OverlayPreset;
@@ -418,7 +418,8 @@ export const BUILTIN_PRESETS: { name: string; preset: OverlayPreset }[] = [
 export const DEFAULT_PREFS: InputOverlayPrefs = {
   enabled: true,
   style: 'KeyboardMouse',
-  position: 'BottomLeft',
+  posX: 0,
+  posY: 1,
   scale: 1,
   opacity: 1,
   preset: SIXTY,
@@ -430,14 +431,38 @@ export function clonePreset(p: OverlayPreset): OverlayPreset {
   return JSON.parse(JSON.stringify(p)) as OverlayPreset;
 }
 
+// Accept the new posX/posY fractions (0..1) or migrate the legacy corner enum.
+function migratePosition(parsed: { posX?: unknown; posY?: unknown; position?: unknown }): {
+  posX: number;
+  posY: number;
+} {
+  if (typeof parsed.posX === 'number' && typeof parsed.posY === 'number') {
+    return { posX: parsed.posX, posY: parsed.posY };
+  }
+  switch (parsed.position) {
+    case 'TopLeft':
+      return { posX: 0, posY: 0 };
+    case 'TopRight':
+      return { posX: 1, posY: 0 };
+    case 'BottomRight':
+      return { posX: 1, posY: 1 };
+    default:
+      return { posX: 0, posY: 1 }; // BottomLeft / unknown
+  }
+}
+
 export function loadPrefs(): InputOverlayPrefs {
   try {
     const raw = localStorage.getItem(PREFS_KEY);
     if (raw) {
-      const parsed = JSON.parse(raw) as Partial<InputOverlayPrefs>;
+      const parsed = JSON.parse(raw) as Partial<InputOverlayPrefs> & { position?: string };
+      const { posX, posY } = migratePosition(parsed);
+      delete parsed.position; // drop legacy corner enum so it isn't re-saved
       return {
         ...DEFAULT_PREFS,
         ...parsed,
+        posX,
+        posY,
         preset: parsed.preset ? normalizePreset(parsed.preset) : SIXTY,
       };
     }

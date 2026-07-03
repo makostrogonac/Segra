@@ -269,6 +269,7 @@ export interface Settings {
   frameRate: number;
   stretch4By3: boolean;
   enableHdr: boolean; // When false, recordings are always SDR even on an HDR display
+  droppedFrameWarningEnabled: boolean;
   rateControl: string;
   crfValue: number;
   cqLevel: number;
@@ -349,6 +350,7 @@ export const initialSettings: Settings = {
   frameRate: 30,
   stretch4By3: true,
   enableHdr: true,
+  droppedFrameWarningEnabled: true,
   rateControl: 'VBR',
   crfValue: 23,
   cqLevel: 20,

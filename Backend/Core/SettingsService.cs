@@ -720,6 +720,13 @@ namespace Segra.Backend.Core
                 hasChanges = true;
             }
 
+            if (settings.DroppedFrameWarningEnabled != updatedSettings.DroppedFrameWarningEnabled)
+            {
+                Log.Information($"DroppedFrameWarningEnabled changed from '{settings.DroppedFrameWarningEnabled}' to '{updatedSettings.DroppedFrameWarningEnabled}'");
+                settings.DroppedFrameWarningEnabled = updatedSettings.DroppedFrameWarningEnabled;
+                hasChanges = true;
+            }
+
             if (settings.AirplaneMode != updatedSettings.AirplaneMode)
             {
                 Log.Information($"AirplaneMode changed from '{settings.AirplaneMode}' to '{updatedSettings.AirplaneMode}'");

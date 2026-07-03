@@ -1,8 +1,7 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Keyboard, Gamepad2, Eye, EyeOff, Settings as SettingsIcon } from 'lucide-react';
 import {
   InputOverlayPrefs,
-  OverlayPosition,
   OverlayPreset,
   loadPrefs,
   savePrefs,
@@ -13,7 +12,9 @@ import InputOverlayEditor from './InputOverlayEditor';
 // ponytail: post-hoc input overlay. Reads {recording}.inputs.json (NDJSON captured during
 // recording) and renders a toggleable keyboard/mouse or gamepad overlay over the editor <video>,
 // driven by currentTime. Non-destructive. Appearance prefs live in localStorage (not settings)
-// because capture is always-on and the style is chosen while viewing.
+// because capture is always-on and the style is chosen while viewing. Position is free-form:
+// posX/posY are fractions of (videoSize - overlaySize), so 0/1 = flush to that edge. Drag the
+// overlay to move it (enabled while the options panel is open so normal playback stays click-through).
 
 interface InputSample {
   t: number;
@@ -46,20 +47,6 @@ const DPAD_UP = 0x0001,
   BTN_Y = 0x8000;
 
 const BASELINE = 1280; // overlay is sized relative to a 1280px-wide video; preview and burn-in share this.
-
-const POSITION_ORIGIN: Record<OverlayPosition, string> = {
-  TopLeft: 'top left',
-  TopRight: 'top right',
-  BottomLeft: 'bottom left',
-  BottomRight: 'bottom right',
-};
-
-const POSITION_LABEL: Record<OverlayPosition, string> = {
-  TopLeft: 'TL',
-  TopRight: 'TR',
-  BottomLeft: 'BL',
-  BottomRight: 'BR',
-};
 
 function inputsJsonPath(filePath: string): string {
   return filePath.replace(/\.[^.]+$/, '.inputs.json');
@@ -95,8 +82,19 @@ export default function InputOverlay({
   const [panelOpen, setPanelOpen] = useState(false);
   const [editorOpen, setEditorOpen] = useState(false);
   const [videoW, setVideoW] = useState(1280);
+  const [videoH, setVideoH] = useState(720);
+  const [natural, setNatural] = useState({ w: 200, h: 150 });
   const rafRef = useRef<number | null>(null);
   const lastUpdateRef = useRef(0);
+  const contentRef = useRef<HTMLDivElement | null>(null);
+  const roRef = useRef<ResizeObserver | null>(null);
+  const dragRef = useRef<{
+    rect: DOMRect;
+    denomX: number;
+    denomY: number;
+    grabX: number;
+    grabY: number;
+  } | null>(null);
 
   const setPref = (patch: Partial<InputOverlayPrefs>) =>
     setPrefs((prev) => {
@@ -104,6 +102,21 @@ export default function InputOverlay({
       savePrefs(next);
       return next;
     });
+
+  // Ref callback: measure the overlay's unscaled size and track it so position fractions map to
+  // exact corners. Fires on mount/unmount (overlay shows only during playback) and observes resize.
+  const observeContent = useCallback((el: HTMLDivElement | null) => {
+    contentRef.current = el;
+    roRef.current?.disconnect();
+    roRef.current = null;
+    if (el) {
+      const update = () => setNatural({ w: el.offsetWidth || 200, h: el.offsetHeight || 150 });
+      update();
+      const ro = new ResizeObserver(update);
+      ro.observe(el);
+      roRef.current = ro;
+    }
+  }, []);
 
   // Load the captured input stream for this recording.
   useEffect(() => {
@@ -156,7 +169,7 @@ export default function InputOverlay({
     };
   }, [prefs.enabled, available, samples, videoRef]);
 
-  // Track the video's rendered width so the overlay scales with it (keeps preview and burn-in consistent).
+  // Track the video's rendered size so the overlay scales with it (keeps preview and burn-in consistent).
   useEffect(() => {
     let ro: ResizeObserver | null = null;
     let raf = 0;
@@ -167,7 +180,10 @@ export default function InputOverlay({
         if (attempts++ < 60) raf = requestAnimationFrame(attach);
         return;
       }
-      const update = () => setVideoW(v.clientWidth || 1280);
+      const update = () => {
+        setVideoW(v.clientWidth || 1280);
+        setVideoH(v.clientHeight || 720);
+      };
       update();
       ro = new ResizeObserver(update);
       ro.observe(v);
@@ -182,18 +198,14 @@ export default function InputOverlay({
   if (!available) return null;
 
   const isController = prefs.style === 'XboxController' || prefs.style === 'PlayStationController';
-  const origin = POSITION_ORIGIN[prefs.position];
   const videoScale = videoW / BASELINE;
   const renderScale = videoScale * prefs.scale;
-  const margin = 8 * videoScale;
-  const posStyle: React.CSSProperties =
-    prefs.position === 'TopLeft'
-      ? { top: margin, left: margin }
-      : prefs.position === 'TopRight'
-        ? { top: margin, right: margin }
-        : prefs.position === 'BottomLeft'
-          ? { bottom: margin, left: margin }
-          : { bottom: margin, right: margin };
+  const sW = natural.w * renderScale;
+  const sH = natural.h * renderScale;
+  const denomX = videoW - sW;
+  const denomY = videoH - sH;
+  const left = denomX > 0 ? prefs.posX * denomX : denomX / 2;
+  const top = denomY > 0 ? prefs.posY * denomY : denomY / 2;
   const cur = currentIdx >= 0 ? samples[currentIdx] : null;
   const keysDown = new Set(cur?.k ?? []);
   const mb = cur?.mb ?? 0;
@@ -208,6 +220,44 @@ export default function InputOverlay({
 
   const btn = (active: boolean) =>
     active ? 'btn btn-xs btn-primary' : 'btn btn-xs btn-ghost bg-black/60 text-white';
+
+  const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (!panelOpen) return;
+    const v = videoRef.current;
+    if (!v) return;
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    const rect = v.getBoundingClientRect();
+    dragRef.current = {
+      rect,
+      denomX,
+      denomY,
+      grabX: e.clientX - rect.left - left,
+      grabY: e.clientY - rect.top - top,
+    };
+  };
+
+  const onDragMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const localX = e.clientX - d.rect.left;
+    const localY = e.clientY - d.rect.top;
+    const nl = d.denomX > 0 ? Math.max(0, Math.min(d.denomX, localX - d.grabX)) : d.denomX / 2;
+    const nt = d.denomY > 0 ? Math.max(0, Math.min(d.denomY, localY - d.grabY)) : d.denomY / 2;
+    setPref({
+      posX: d.denomX > 0 ? nl / d.denomX : 0,
+      posY: d.denomY > 0 ? nt / d.denomY : 0,
+    });
+  };
+
+  const endDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    dragRef.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // already released
+    }
+  };
 
   return (
     <>
@@ -254,17 +304,17 @@ export default function InputOverlay({
         {panelOpen && (
           <div className="flex w-52 flex-col gap-2 rounded-lg bg-black/80 p-3">
             <div>
-              <div className="mb-1 text-xs font-semibold text-white/70">Position</div>
-              <div className="grid grid-cols-2 gap-1">
-                {(Object.keys(POSITION_LABEL) as OverlayPosition[]).map((p) => (
-                  <button
-                    key={p}
-                    onClick={() => setPref({ position: p })}
-                    className={btn(prefs.position === p)}
-                  >
-                    {POSITION_LABEL[p]}
-                  </button>
-                ))}
+              <div className="mb-1 flex items-center justify-between text-xs font-semibold text-white/70">
+                <span>Position</span>
+                <button
+                  onClick={() => setPref({ posX: 0, posY: 1 })}
+                  className="text-[11px] text-white/60 underline hover:text-white"
+                >
+                  Reset
+                </button>
+              </div>
+              <div className="text-[11px] text-white/50">
+                Drag the overlay to move it (keep this panel open while dragging).
               </div>
             </div>
             <div>
@@ -322,35 +372,48 @@ export default function InputOverlay({
 
       {prefs.enabled && cur && (
         <div
-          className="pointer-events-none absolute z-10"
+          onPointerDown={startDrag}
+          onPointerMove={onDragMove}
+          onPointerUp={endDrag}
+          className="absolute z-10 select-none"
           style={{
-            ...posStyle,
-            opacity: prefs.opacity,
-            transform: `scale(${renderScale})`,
-            transformOrigin: origin,
+            left,
+            top,
+            pointerEvents: panelOpen ? 'auto' : 'none',
+            cursor: panelOpen ? 'move' : 'default',
+            touchAction: 'none',
           }}
         >
-          {isController ? (
-            <Gamepad
-              cb={cb}
-              lt={lt}
-              rt={rt}
-              lx={lx}
-              ly={ly}
-              rx={rx}
-              ry={ry}
-              playstation={prefs.style === 'PlayStationController'}
-            />
-          ) : (
-            <KeyboardMouse
-              preset={prefs.preset}
-              keysDown={keysDown}
-              mb={mb}
-              wheel={wheel}
-              samples={samples}
-              idx={currentIdx}
-            />
-          )}
+          <div
+            ref={observeContent}
+            style={{
+              transformOrigin: 'top left',
+              transform: `scale(${renderScale})`,
+              opacity: prefs.opacity,
+            }}
+          >
+            {isController ? (
+              <Gamepad
+                cb={cb}
+                lt={lt}
+                rt={rt}
+                lx={lx}
+                ly={ly}
+                rx={rx}
+                ry={ry}
+                playstation={prefs.style === 'PlayStationController'}
+              />
+            ) : (
+              <KeyboardMouse
+                preset={prefs.preset}
+                keysDown={keysDown}
+                mb={mb}
+                wheel={wheel}
+                samples={samples}
+                idx={currentIdx}
+              />
+            )}
+          </div>
         </div>
       )}
     </>

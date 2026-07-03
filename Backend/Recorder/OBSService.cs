@@ -2222,6 +2222,9 @@ namespace Segra.Backend.Recorder
                 if (_isStoppingOrStopped || (_output?.IsActive != true && _bufferOutput?.IsActive != true))
                     return;
 
+                if (!Settings.Instance.DroppedFrameWarningEnabled)
+                    return;
+
                 var stats = Obs.GetPerformanceStats();
                 uint lagged = CounterDelta(stats.LaggedFrames, _droppedFrameBaselineLagged);
                 uint skipped = CounterDelta(stats.SkippedFrames, _droppedFrameBaselineSkipped);

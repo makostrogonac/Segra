@@ -710,16 +710,10 @@ namespace Segra.Backend.App
                     _ => OverlayBurnStyle.KeyboardMouse
                 };
             }
-            if (e.TryGetProperty("position", out JsonElement pos) && pos.ValueKind == JsonValueKind.String)
-            {
-                cfg.Position = pos.GetString() switch
-                {
-                    "TopLeft" => OverlayBurnPosition.TopLeft,
-                    "TopRight" => OverlayBurnPosition.TopRight,
-                    "BottomRight" => OverlayBurnPosition.BottomRight,
-                    _ => OverlayBurnPosition.BottomLeft
-                };
-            }
+            if (e.TryGetProperty("posX", out JsonElement px) && px.TryGetDouble(out double pxv))
+                cfg.PosX = pxv;
+            if (e.TryGetProperty("posY", out JsonElement py) && py.TryGetDouble(out double pyv))
+                cfg.PosY = pyv;
             if (e.TryGetProperty("scale", out JsonElement sc) && sc.TryGetDouble(out double sv))
                 cfg.Scale = sv;
             if (e.TryGetProperty("opacity", out JsonElement op) && op.TryGetDouble(out double ov))

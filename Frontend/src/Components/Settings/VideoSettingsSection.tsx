@@ -517,6 +517,19 @@ export default function VideoSettingsSection({
           </label>
         </div>
       )}
+
+      {/* Dropped-frame warning */}
+      <div className="mt-3">
+        <label className="flex items-center gap-2 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={settings.droppedFrameWarningEnabled}
+            onChange={(e) => updateSettings({ droppedFrameWarningEnabled: e.target.checked })}
+            className="checkbox checkbox-primary checkbox-sm"
+          />
+          <span>Warn when recordings drop frames</span>
+        </label>
+      </div>
     </div>
   );
 }
