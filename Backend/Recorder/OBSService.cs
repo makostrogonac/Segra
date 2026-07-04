@@ -175,6 +175,7 @@ namespace Segra.Backend.Recorder
 
             Log.Information("Attempting to save replay buffer...");
             _replaySaved = false;
+            double saveAtMs = InputCaptureService.ElapsedMs;
 
             try
             {
@@ -225,6 +226,17 @@ namespace Segra.Backend.Recorder
 
             // Ensure file is fully written to disk/network before thumbnail generation
             await EnsureFileReady(savedPath);
+
+            // Slice captured inputs for this replay's time window -> {replay}.inputs.json
+            try
+            {
+                TimeSpan replayDur = await FFmpegService.GetVideoDuration(savedPath);
+                InputCaptureService.SliceAndSave(savedPath, saveAtMs, replayDur.TotalMilliseconds);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning($"Failed to attach input overlay data to replay: {ex.Message}");
+            }
 
             // Create metadata for the buffer recording
             await ContentService.CreateMetadataFile(savedPath, Content.ContentType.Buffer, game, igdbId: igdbId, audioTrackNames: AppState.Instance.Recording?.AudioTrackNames);
@@ -1156,8 +1168,10 @@ namespace Segra.Backend.Recorder
             StartDroppedFrameMonitor();
 
             Log.Information("Recording started: " + videoOutputPath);
-            if (!string.IsNullOrEmpty(videoOutputPath))
-                InputCaptureService.Start(videoOutputPath, startTime ?? DateTime.Now);
+            // Input capture runs for session AND buffer modes. A rolling in-memory ring
+            // (sized to the replay buffer window) lets saved replays get their own sliced .inputs.json.
+            int ringSec = (eff.ReplayBufferDuration > 0 ? eff.ReplayBufferDuration : 30) + 5;
+            InputCaptureService.Start(videoOutputPath, startTime ?? DateTime.Now, TimeSpan.FromSeconds(ringSec));
             GeneralUtils.SetProcessPriority(ProcessPriorityClass.High);
             if (!isReplayBufferMode)
             {

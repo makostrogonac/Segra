@@ -28,6 +28,9 @@ internal static class InputCaptureService
     private static StreamWriter? _writer;
     private static long _lastFlushTicks;
     private static Stopwatch? _stopwatch;
+    private static double _ringRetentionMs;
+    private static readonly Queue<(double t, string line)> _ring = new();
+    private static readonly object _ringLock = new();
 
     private static readonly object _fileLock = new();
     private static readonly object _stateLock = new();
@@ -41,16 +44,28 @@ internal static class InputCaptureService
     private static readonly LowLevelKeyboardProc _keyboardProc = KeyboardHookCallback;
     private static readonly LowLevelMouseProc _mouseProc = MouseHookCallback;
 
-    public static void Start(string videoFilePath, DateTime recordingStart)
+    public static void Start(string? videoFilePath, DateTime recordingStart, TimeSpan ringRetention)
     {
         if (!OperatingSystem.IsWindows())
             return;
         Stop(); // safety: tear down any prior session
 
-        _outputPath = Path.ChangeExtension(videoFilePath, ".inputs.json");
-        Directory.CreateDirectory(Path.GetDirectoryName(_outputPath)!);
-        _stream = new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read);
-        _writer = new StreamWriter(_stream, new UTF8Encoding(false)) { AutoFlush = false };
+        // Rolling in-memory ring used to slice .inputs.json for saved replays. Always on
+        // (even in session mode) because hybrid mode records a file AND serves replays.
+        _ringRetentionMs = Math.Max(0, ringRetention.TotalMilliseconds);
+        lock (_ringLock) _ring.Clear();
+
+        if (!string.IsNullOrEmpty(videoFilePath))
+        {
+            _outputPath = Path.ChangeExtension(videoFilePath, ".inputs.json");
+            Directory.CreateDirectory(Path.GetDirectoryName(_outputPath)!);
+            _stream = new FileStream(_outputPath, FileMode.Create, FileAccess.Write, FileShare.Read);
+            _writer = new StreamWriter(_stream, new UTF8Encoding(false)) { AutoFlush = false };
+        }
+        else
+        {
+            _outputPath = null;
+        }
         _stopwatch = Stopwatch.StartNew();
         ResetState();
         _lastFlushTicks = Environment.TickCount64;
@@ -59,7 +74,54 @@ internal static class InputCaptureService
         _hookThread.Start();
 
         _snapshotTimer = new Timer(SnapshotCallback, null, SnapshotIntervalMs, SnapshotIntervalMs);
-        Log.Information($"Input capture started -> {_outputPath}");
+        Log.Information($"Input capture started -> {_outputPath ?? "(ring only)"}");
+    }
+
+    public static double ElapsedMs => _stopwatch?.Elapsed.TotalMilliseconds ?? 0d;
+
+    // Slice the in-memory ring for a saved replay's [end-duration, end] window and write
+    // {replay}.inputs.json next to it, rebasing t so the window start aligns with the
+    // replay's first frame. Residual drift is covered by the overlay's syncOffsetMs knob.
+    public static bool SliceAndSave(string replayFilePath, double windowEndMs, double windowDurationMs)
+    {
+        if (windowDurationMs <= 0) return false;
+        double start = windowEndMs - windowDurationMs;
+
+        var sb = new StringBuilder();
+        int count = 0;
+        lock (_ringLock)
+        {
+            foreach (var (t, line) in _ring)
+            {
+                if (t < start) continue;
+                if (t > windowEndMs) break;
+                int comma = line.IndexOf(',');
+                if (comma <= 0) continue;
+                sb.Append("{\"t\":").Append((t - start).ToString("0.##", CultureInfo.InvariantCulture));
+                sb.Append(line, comma, line.Length - comma);
+                count++;
+            }
+        }
+
+        if (count == 0)
+        {
+            Log.Information($"No input samples in replay window [{start:F0}..{windowEndMs:F0}ms]; skipping overlay file");
+            return false;
+        }
+
+        string outPath = Path.ChangeExtension(replayFilePath, ".inputs.json");
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
+            File.WriteAllText(outPath, sb.ToString());
+            Log.Information($"Input capture sliced {count} samples for replay -> {outPath}");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log.Warning($"Failed to write replay overlay file {outPath}: {ex.Message}");
+            return false;
+        }
     }
 
     public static void Stop()
@@ -88,6 +150,8 @@ internal static class InputCaptureService
             _writer = null;
             _stream = null;
         }
+        lock (_ringLock) _ring.Clear();
+        _ringRetentionMs = 0;
         _stopwatch = null;
         Log.Information("Input capture stopped");
     }
@@ -181,7 +245,11 @@ internal static class InputCaptureService
     {
         try
         {
-            if (_writer == null || _stopwatch == null)
+            if (_stopwatch == null)
+                return;
+            bool hasFile = _writer != null;
+            bool hasRing = _ringRetentionMs > 0;
+            if (!hasFile && !hasRing)
                 return;
 
             double t = _stopwatch.Elapsed.TotalMilliseconds;
@@ -240,15 +308,28 @@ internal static class InputCaptureService
             sb.Append(",\"rx\":").Append(rx.ToString("0.###", CultureInfo.InvariantCulture));
             sb.Append(",\"ry\":").Append(ry.ToString("0.###", CultureInfo.InvariantCulture));
             sb.Append("}\n");
+            string line = sb.ToString();
 
-            lock (_fileLock)
-                _writer.Write(sb.ToString());
-
-            if (Environment.TickCount64 - _lastFlushTicks >= FlushIntervalMs)
+            if (hasFile)
             {
                 lock (_fileLock)
-                    _writer.Flush();
-                _lastFlushTicks = Environment.TickCount64;
+                    _writer!.Write(line);
+                if (Environment.TickCount64 - _lastFlushTicks >= FlushIntervalMs)
+                {
+                    lock (_fileLock)
+                        _writer!.Flush();
+                    _lastFlushTicks = Environment.TickCount64;
+                }
+            }
+
+            if (hasRing)
+            {
+                lock (_ringLock)
+                {
+                    _ring.Enqueue((t, line));
+                    while (_ring.Count > 0 && _ring.Peek().t < t - _ringRetentionMs)
+                        _ring.Dequeue();
+                }
             }
         }
         catch (Exception ex)
