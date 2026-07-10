@@ -72,6 +72,7 @@ namespace Segra.Backend.Recorder
 
         // Mixer mask of the shared "Voice Chat" track, so sources created mid-recording land on the same track
         private static uint _voiceChatMixerMask = 1u << 0;
+        private static bool _forceDesktopGameAudioFallback;
 
         private static readonly (string Name, string Window)[] VoiceChatApps =
         [
@@ -80,6 +81,12 @@ namespace Segra.Backend.Recorder
             ("TeamSpeak 3", "TeamSpeak 3:Qt5152QWindowIcon:ts3client_win64.exe"),
             ("TeamSpeak 3", "TeamSpeak 3:Qt5152QWindowIcon:ts3client_win32.exe"),
         ];
+
+        private static bool RequiresDesktopGameAudioFallback(string fileName)
+        {
+            // ponytail: OBS capture_audio is known silent/blocked for CS2; make this a user list only if more games need it.
+            return string.Equals(fileName, "cs2.exe", StringComparison.OrdinalIgnoreCase);
+        }
 
         private static VideoEncoder? _videoEncoder;
         private static readonly List<AudioEncoder> _audioEncoders = [];
@@ -683,6 +690,10 @@ namespace Segra.Backend.Recorder
             DisposeSources();
             DisposeEncoders();
 
+            _forceDesktopGameAudioFallback = Settings.Instance.AudioOutputMode != AudioOutputMode.All && RequiresDesktopGameAudioFallback(fileName);
+            if (_forceDesktopGameAudioFallback)
+                Log.Information($"{fileName}: game capture audio fallback enabled; Game Audio track will use selected output device(s).");
+
             // Configure video settings specifically for this recording/buffer
             ResetVideoSettings(out _, customFps: (uint)eff.FrameRate, customResolution: eff.Resolution);
 
@@ -716,11 +727,20 @@ namespace Segra.Backend.Recorder
                         Log.Information("Game capture color space set to Rec.2100 PQ (HDR)");
                     }
 
-                    // Enable capture_audio on game capture when using GameOnly or GameAndDiscord mode
+                    // Enable capture_audio on game capture when using GameOnly or GameAndDiscord mode,
+                    // except known-bad games where the Game Audio track falls back to selected output devices.
                     if (Settings.Instance.AudioOutputMode != AudioOutputMode.All)
                     {
-                        GameCaptureSource.Update(s => s.Set("capture_audio", true));
-                        Log.Information($"Game capture audio enabled (mode: {Settings.Instance.AudioOutputMode})");
+                        if (_forceDesktopGameAudioFallback)
+                        {
+                            GameCaptureSource.Update(s => s.Set("capture_audio", false));
+                            Log.Information($"Game capture audio disabled for {fileName}; using selected output device(s) for Game Audio");
+                        }
+                        else
+                        {
+                            GameCaptureSource.Update(s => s.Set("capture_audio", true));
+                            Log.Information($"Game capture audio enabled (mode: {Settings.Instance.AudioOutputMode})");
+                        }
                     }
 
                     Log.Information($"Game capture configured for: {fileName}");
@@ -926,7 +946,7 @@ namespace Segra.Backend.Recorder
             // If enabled: Track 1 = Full Mix, Tracks 2..6 = per-group isolated (up to 5 groups)
             // If disabled: Track 1 only (Full Mix)
             // Each group shares one isolated track; all voice chat apps form a single "Voice Chat" group.
-            // In GameOnly/GameAndDiscord modes, desktop sources are fallback-only (full mix only).
+            // In GameOnly/GameAndDiscord modes, selected output devices share Game Audio as fallback until hook.
             var trackGroups = new List<List<Source>>();
             foreach (var micSource in _micSources)
                 trackGroups.Add([micSource]);
@@ -936,18 +956,22 @@ namespace Segra.Backend.Recorder
             int voiceChatGroupIndex = -1;
             if (audioOutputMode != AudioOutputMode.All && GameCaptureSource != null)
             {
-                // Desktop sources are fallback-only: assign to full mix (Track 1) only, no separate tracks
-                foreach (var desktopSource in _desktopSources)
-                {
-                    try { desktopSource.AudioMixers = 1u << 0; }
-                    catch (Exception ex) { Log.Warning($"Failed to set mixer for fallback desktop source: {ex.Message}"); }
-                }
-
-                // Remove desktop sources from the list that gets separate tracks
+                // Selected output devices join Game Audio as a fallback. Normal games mute them on hook
+                // so capture_audio wins; known-bad games keep them unmuted and disable capture_audio.
                 trackGroups = [];
                 foreach (var micSource in _micSources)
                     trackGroups.Add([micSource]);
-                trackGroups.Add([GameCaptureSource]);
+
+                var gameAudioGroup = new List<Source>();
+                if (!_forceDesktopGameAudioFallback)
+                    gameAudioGroup.Add(GameCaptureSource);
+                gameAudioGroup.AddRange(_desktopSources);
+                if (gameAudioGroup.Count == 0)
+                    gameAudioGroup.Add(GameCaptureSource);
+                if (_forceDesktopGameAudioFallback && _desktopSources.Count == 0)
+                    Log.Warning($"{fileName}: selected output-device fallback requested, but no output devices are configured.");
+
+                trackGroups.Add(gameAudioGroup);
 
                 // The voice chat group is reserved even when currently empty so apps launched
                 // mid-recording can still join its track (the encoders are fixed once recording starts)
@@ -1666,16 +1690,28 @@ namespace Segra.Backend.Recorder
                 // Remove display capture to save resources while game is hooked
                 DisposeDisplaySource();
 
-                // Switch output audio: mute desktop sources and unmute game/voice chat sources
+                // Switch output audio: normal games mute desktop fallback; known-bad games keep it for Game Audio.
                 var audioOutputMode = Settings.Instance.AudioOutputMode;
                 if (audioOutputMode != AudioOutputMode.All)
                 {
-                    foreach (var desktopSource in _desktopSources)
+                    if (_forceDesktopGameAudioFallback)
                     {
-                        try { desktopSource.IsMuted = true; }
-                        catch (Exception ex) { Log.Warning($"Failed to mute desktop source: {ex.Message}"); }
+                        foreach (var desktopSource in _desktopSources)
+                        {
+                            try { desktopSource.IsMuted = false; }
+                            catch (Exception ex) { Log.Warning($"Failed to keep desktop source unmuted: {ex.Message}"); }
+                        }
+                        Log.Information("Keeping desktop audio sources unmuted (selected output-device fallback for Game Audio)");
                     }
-                    Log.Information("Muted desktop audio sources (game hooked, using capture_audio)");
+                    else
+                    {
+                        foreach (var desktopSource in _desktopSources)
+                        {
+                            try { desktopSource.IsMuted = true; }
+                            catch (Exception ex) { Log.Warning($"Failed to mute desktop source: {ex.Message}"); }
+                        }
+                        Log.Information("Muted desktop audio sources (game hooked, using capture_audio)");
+                    }
 
                     foreach (var (voiceName, _, voiceSource) in _voiceChatSources)
                     {
@@ -2063,6 +2099,7 @@ namespace Segra.Backend.Recorder
                 }
             }
             _voiceChatSources.Clear();
+            _forceDesktopGameAudioFallback = false;
         }
 
         public static void DisposeGameCaptureSource()
