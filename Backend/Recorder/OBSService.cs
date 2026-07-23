@@ -692,8 +692,8 @@ namespace Segra.Backend.Recorder
         /// <summary>
         /// Configures OBS video settings based on the provided dimensions.
         /// </summary>
-        /// <param name="is4by3">True if the content was detected as 4:3 and stretched to 16:9.</param>
-        private static void ResetVideoSettings(out bool is4by3, uint? customFps = null, uint? customOutputWidth = null, uint? customOutputHeight = null, string? customResolution = null)
+        /// <param name="stretchTo16By9">True if non-16:9 content should be stretched to 16:9.</param>
+        private static void ResetVideoSettings(out bool stretchTo16By9, uint? customFps = null, uint? customOutputWidth = null, uint? customOutputHeight = null, string? customResolution = null)
         {
             SettingsService.GetPrimaryMonitorResolution(out uint baseWidth, out uint baseHeight);
 
@@ -708,17 +708,14 @@ namespace Segra.Backend.Recorder
             uint outputWidth = baseWidth;
             uint outputHeight = baseHeight;
 
-            // Check if the input aspect ratio is close to 4:3 (1.33)
             double aspectRatio = (double)baseWidth / baseHeight;
-            is4by3 = Math.Abs(aspectRatio - 4.0 / 3.0) < 0.1 && Settings.Instance.Stretch4By3;
+            stretchTo16By9 = Math.Abs(aspectRatio - 16.0 / 9.0) >= 0.01 && Settings.Instance.Stretch4By3;
 
-            // If the content is 4:3 and stretching is enabled, stretch it to 16:9 while preserving height
-            // Only modify output dimensions, not base dimensions (base = actual capture size)
-            if (is4by3)
+            // Only modify output dimensions, not base dimensions (base = actual capture size).
+            if (stretchTo16By9)
             {
-                // Calculate 16:9 width based on the current height for output only
                 outputWidth = (uint)(baseHeight * (16.0 / 9.0));
-                Log.Information($"Stretching 4:3 content to 16:9: {baseWidth}x{baseHeight} -> {outputWidth}x{outputHeight}");
+                Log.Information($"Stretching non-16:9 content to 16:9: {baseWidth}x{baseHeight} -> {outputWidth}x{outputHeight}");
             }
 
             // If content height exceeds max height setting, downscale proportionally
@@ -966,17 +963,15 @@ namespace Segra.Backend.Recorder
                 if (WindowUtils.GetWindowDimensionsByPreRecordingExeOrPid(out uint windowWidth, out uint windowHeight))
                 {
                     ResetVideoSettings(
-                        out bool is4by3,
+                        out bool stretchTo16By9,
                         customFps: (uint)eff.FrameRate,
                         customOutputWidth: windowWidth,
                         customOutputHeight: windowHeight,
                         customResolution: eff.Resolution
                     );
 
-                    // Scene item bounds must use BASE dimensions (not output) because the scene canvas is at base resolution.
-                    // For 4:3 content: base is 4:3, output is 16:9 - OBS handles the stretch at the output level.
-                    // For non-4:3: base == output, ScaleInner ensures content scales with black bars if window shrinks.
-                    var boundsType = is4by3 ? ObsBoundsType.Stretch : ObsBoundsType.ScaleInner;
+                    // Scene item bounds use BASE dimensions; OBS scales that canvas to the output dimensions.
+                    var boundsType = stretchTo16By9 ? ObsBoundsType.Stretch : ObsBoundsType.ScaleInner;
                     _gameCaptureItem?.SetBounds(boundsType, _currentBaseWidth, _currentBaseHeight).SetPosition(0, 0);
                     _displayItem?.SetBounds(boundsType, _currentBaseWidth, _currentBaseHeight).SetPosition(0, 0);
                 }

@@ -484,7 +484,7 @@ export default function VideoSettingsSection({
         </div>
       </div>
 
-      {/* 4:3 Stretch Option */}
+      {/* Aspect-ratio stretch option */}
       <div className="mt-3">
         <label
           className={`flex items-center gap-2 ${isRecording ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}`}
@@ -496,7 +496,7 @@ export default function VideoSettingsSection({
             disabled={isRecording}
             className="checkbox checkbox-primary checkbox-sm"
           />
-          <span>Stretch 4:3 content to 16:9</span>
+          <span>Stretch non-16:9 content to 16:9</span>
         </label>
       </div>
 
