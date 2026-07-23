@@ -15,7 +15,7 @@ namespace Segra.Backend.App
         private const string DefaultUpdateRepository = "https://github.com/Segergren/Segra";
         public static GithubSource Source => CreateSource(false);
         public static GithubSource BetaSource => CreateSource(true);
-        public static UpdateManager UpdateManager { get; private set; } = new(Source);
+        public static UpdateManager UpdateManager { get; private set; } = CreateUpdateManager(false);
 
         // Serializes Velopack operations that share the on-disk .velopack_lock.
         private static readonly SemaphoreSlim _updateGate = new(1, 1);
@@ -30,6 +30,9 @@ namespace Segra.Backend.App
 
         private static GithubSource CreateSource(bool includePrereleases) =>
             new(GetUpdateRepositoryUrl(), null, includePrereleases);
+
+        private static UpdateManager CreateUpdateManager(bool includePrereleases) =>
+            new(CreateSource(includePrereleases), new UpdateOptions { AllowVersionDowngrade = true });
 
         private static string GetUpdateRepositoryUrl() =>
             TryGetGitHubRepository(Core.Models.Settings.Instance.UpdateRepository, out string owner, out string repo)
@@ -98,7 +101,7 @@ namespace Segra.Backend.App
             }
         }
 
-        public static async Task<bool> UpdateAppIfNecessary(bool forceCheck = false)
+        public static async Task<bool> UpdateAppIfNecessary(bool forceCheck = false, bool channelChanged = false)
         {
             if (!forceCheck && DateTime.UtcNow - _lastUpdateCheckUtc < UpdateCheckCacheTtl)
             {
@@ -111,16 +114,25 @@ namespace Segra.Backend.App
             try
             {
                 // Reuse the result if another check finished while we were waiting on the gate.
-                if (_lastUpdateCheckUtc >= waitStartedUtc)
+                if (!channelChanged && _lastUpdateCheckUtc >= waitStartedUtc)
                 {
                     Log.Information("Skipping update check: another check completed while waiting for the update lock");
                     return false;
                 }
 
                 Core.Models.AppState.Instance.IsCheckingForUpdates = true;
+                if (channelChanged)
+                {
+                    LatestUpdateInfo = null;
+                    lock (_updateProgressLock)
+                    {
+                        _currentUpdateProgress = null;
+                    }
+                    await MessageService.SendFrontendMessage("UpdateProgressCleared", new { });
+                }
 
                 bool useBetaChannel = Core.Models.Settings.Instance.ReceiveBetaUpdates;
-                UpdateManager = new UpdateManager(CreateSource(useBetaChannel));
+                UpdateManager = CreateUpdateManager(useBetaChannel);
                 Log.Information($"Using {(useBetaChannel ? "beta" : "stable")} update channel from {GetUpdateRepositoryUrl()}");
 
                 if (!UpdateManager.IsInstalled)
@@ -248,7 +260,7 @@ namespace Segra.Backend.App
                 Core.Models.AppState.Instance.IsCheckingForUpdates = true;
 
                 bool useBetaChannel = Core.Models.Settings.Instance.ReceiveBetaUpdates;
-                UpdateManager = new UpdateManager(CreateSource(useBetaChannel));
+                UpdateManager = CreateUpdateManager(useBetaChannel);
                 var current = UpdateManager.CurrentVersion;
 
                 if (current == null || UpdateManager == null)

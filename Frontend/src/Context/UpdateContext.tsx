@@ -67,6 +67,10 @@ export function UpdateProvider({ children }: { children: ReactNode }) {
         setUpdateInfo(message.content);
       }
 
+      if (message.method === 'UpdateProgressCleared') {
+        setUpdateInfo(null);
+      }
+
       if (isReleaseNotesMessage(message)) {
         // Handle the ReleaseNotes message
         if (message.content && message.content.releaseNotesList) {

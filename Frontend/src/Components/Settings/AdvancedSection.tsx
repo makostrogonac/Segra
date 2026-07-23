@@ -13,6 +13,7 @@ interface AdvancedSectionProps {
   updateSettings: (updates: Partial<SettingsType>) => void;
   openReleaseNotesModal: (version: string | null) => void;
   checkForUpdates: () => void;
+  clearUpdateInfo: () => void;
 }
 
 export default function AdvancedSection({
@@ -20,6 +21,7 @@ export default function AdvancedSection({
   updateSettings,
   openReleaseNotesModal,
   checkForUpdates,
+  clearUpdateInfo,
 }: AdvancedSectionProps) {
   const appState = useAppState();
   const rowRef = useRef<HTMLDivElement>(null);
@@ -60,7 +62,10 @@ export default function AdvancedSection({
                       { value: 'beta', label: 'Beta' },
                     ]}
                     value={settings.receiveBetaUpdates ? 'beta' : 'stable'}
-                    onChange={(val) => updateSettings({ receiveBetaUpdates: val === 'beta' })}
+                    onChange={(val) => {
+                      clearUpdateInfo();
+                      updateSettings({ receiveBetaUpdates: val === 'beta' });
+                    }}
                   />
                 </div>
                 <Button

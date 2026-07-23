@@ -57,6 +57,7 @@ jobs:
 
           "UPSTREAM_TAG=$tag" >> $env:GITHUB_ENV
           "VERSION=$version" >> $env:GITHUB_ENV
+          "IS_PRERELEASE=$($version.Contains('-').ToString().ToLowerInvariant())" >> $env:GITHUB_ENV
 
       - name: Merge upstream release
         if: env.SKIP_RELEASE != 'true'
@@ -120,7 +121,7 @@ jobs:
         with:
           tag_name: ${{ env.UPSTREAM_TAG }}
           name: Release ${{ env.UPSTREAM_TAG }}
-          prerelease: false
+          prerelease: ${{ env.IS_PRERELEASE == 'true' }}
           files: |
             ./output/Segra-win-Setup.exe
             ./output/RELEASES
