@@ -72,7 +72,6 @@ namespace Segra.Backend.Recorder
 
         // Mixer mask of the shared "Voice Chat" track, so sources created mid-recording land on the same track
         private static uint _voiceChatMixerMask = 1u << 0;
-        private static bool _forceDesktopGameAudioFallback;
 
         private static readonly (string Name, string Window)[] VoiceChatApps =
         [
@@ -81,12 +80,6 @@ namespace Segra.Backend.Recorder
             ("TeamSpeak 3", "TeamSpeak 3:Qt5152QWindowIcon:ts3client_win64.exe"),
             ("TeamSpeak 3", "TeamSpeak 3:Qt5152QWindowIcon:ts3client_win32.exe"),
         ];
-
-        private static bool RequiresDesktopGameAudioFallback(string fileName)
-        {
-            // ponytail: OBS capture_audio is known silent/blocked for CS2; make this a user list only if more games need it.
-            return string.Equals(fileName, "cs2.exe", StringComparison.OrdinalIgnoreCase);
-        }
 
         private static VideoEncoder? _videoEncoder;
         private static readonly List<AudioEncoder> _audioEncoders = [];
@@ -690,10 +683,6 @@ namespace Segra.Backend.Recorder
             DisposeSources();
             DisposeEncoders();
 
-            _forceDesktopGameAudioFallback = Settings.Instance.AudioOutputMode != AudioOutputMode.All && RequiresDesktopGameAudioFallback(fileName);
-            if (_forceDesktopGameAudioFallback)
-                Log.Information($"{fileName}: game capture audio fallback enabled; Game Audio track will use selected output device(s).");
-
             // Configure video settings specifically for this recording/buffer
             ResetVideoSettings(out _, customFps: (uint)eff.FrameRate, customResolution: eff.Resolution);
 
@@ -727,20 +716,11 @@ namespace Segra.Backend.Recorder
                         Log.Information("Game capture color space set to Rec.2100 PQ (HDR)");
                     }
 
-                    // Enable capture_audio on game capture when using GameOnly or GameAndDiscord mode,
-                    // except known-bad games where the Game Audio track falls back to selected output devices.
+                    // Selected output devices remain active as fallback until Hooked confirms injection.
                     if (Settings.Instance.AudioOutputMode != AudioOutputMode.All)
                     {
-                        if (_forceDesktopGameAudioFallback)
-                        {
-                            GameCaptureSource.Update(s => s.Set("capture_audio", false));
-                            Log.Information($"Game capture audio disabled for {fileName}; using selected output device(s) for Game Audio");
-                        }
-                        else
-                        {
-                            GameCaptureSource.Update(s => s.Set("capture_audio", true));
-                            Log.Information($"Game capture audio enabled (mode: {Settings.Instance.AudioOutputMode})");
-                        }
+                        GameCaptureSource.Update(s => s.Set("capture_audio", true));
+                        Log.Information($"Game capture audio enabled (mode: {Settings.Instance.AudioOutputMode})");
                     }
 
                     Log.Information($"Game capture configured for: {fileName}");
@@ -796,12 +776,9 @@ namespace Segra.Backend.Recorder
             Log.Information($"Using encoder: {encoderId}{(_isHdrRecording ? " (HDR)" : "")}");
 
             using var videoEncoderSettings = new ObsKit.NET.Core.Settings();
-            videoEncoderSettings.Set("preset", "Quality");
-            // HEVC needs the Main 10 profile for 10-bit HDR; AV1 derives bit depth from the P010 input.
-            videoEncoderSettings.Set("profile", _isHdrRecording && IsHevcEncoder(encoderId) ? "main10" : "high");
+            bool optimizeNvencHevcCqp = ConfigureVideoEncoderQuality(videoEncoderSettings, encoderId, eff.RateControl, _isHdrRecording);
             videoEncoderSettings.Set("use_bufsize", true);
             videoEncoderSettings.Set("rate_control", eff.RateControl);
-            videoEncoderSettings.Set("keyint_sec", 1);
 
             switch (eff.RateControl)
             {
@@ -836,7 +813,7 @@ namespace Segra.Backend.Recorder
                     throw new Exception("Unsupported Rate Control method.");
             }
 
-            ApplyNvencBFrameLimit(videoEncoderSettings, encoderId);
+            ApplyNvencBFrameLimit(videoEncoderSettings, encoderId, optimizeNvencHevcCqp);
 
             try
             {
@@ -856,8 +833,8 @@ namespace Segra.Backend.Recorder
                     .Sdr());
 
                 encoderId = eff.Codec!.InternalEncoderId;
-                videoEncoderSettings.Set("profile", "high");
-                ApplyNvencBFrameLimit(videoEncoderSettings, encoderId);
+                optimizeNvencHevcCqp = ConfigureVideoEncoderQuality(videoEncoderSettings, encoderId, eff.RateControl, false);
+                ApplyNvencBFrameLimit(videoEncoderSettings, encoderId, optimizeNvencHevcCqp);
                 _videoEncoder = new VideoEncoder(encoderId, "Segra Recorder", videoEncoderSettings);
             }
 
@@ -942,6 +919,9 @@ namespace Segra.Backend.Recorder
                 }
             }
 
+            // Close the race where injection can complete while audio sources are still being created.
+            ApplyGameInjectionAudioState(IsGameCaptureHooked);
+
             // Configure mixers and audio encoders based on setting.
             // If enabled: Track 1 = Full Mix, Tracks 2..6 = per-group isolated (up to 5 groups)
             // If disabled: Track 1 only (Full Mix)
@@ -954,28 +934,32 @@ namespace Segra.Backend.Recorder
                 trackGroups.Add([desktopSource]);
 
             int voiceChatGroupIndex = -1;
-            if (audioOutputMode != AudioOutputMode.All && GameCaptureSource != null)
+            bool hasGameAudioGroup = false;
+            if (audioOutputMode != AudioOutputMode.All)
             {
-                // Selected output devices join Game Audio as a fallback. Normal games mute them on hook
-                // so capture_audio wins; known-bad games keep them unmuted and disable capture_audio.
+                // Both sources share Game Audio until injection succeeds. Hooked then mutes the
+                // output-device sources; if injection never succeeds, they remain the fallback.
                 trackGroups = [];
                 foreach (var micSource in _micSources)
                     trackGroups.Add([micSource]);
 
                 var gameAudioGroup = new List<Source>();
-                if (!_forceDesktopGameAudioFallback)
+                if (GameCaptureSource != null)
                     gameAudioGroup.Add(GameCaptureSource);
                 gameAudioGroup.AddRange(_desktopSources);
-                if (gameAudioGroup.Count == 0)
-                    gameAudioGroup.Add(GameCaptureSource);
-                if (_forceDesktopGameAudioFallback && _desktopSources.Count == 0)
-                    Log.Warning($"{fileName}: selected output-device fallback requested, but no output devices are configured.");
-
-                trackGroups.Add(gameAudioGroup);
+                if (gameAudioGroup.Count > 0)
+                {
+                    trackGroups.Add(gameAudioGroup);
+                    hasGameAudioGroup = true;
+                }
+                else
+                {
+                    Log.Warning("Game Audio has neither an injectable game source nor a selected output device.");
+                }
 
                 // The voice chat group is reserved even when currently empty so apps launched
                 // mid-recording can still join its track (the encoders are fixed once recording starts)
-                if (audioOutputMode == AudioOutputMode.GameAndDiscord)
+                if (audioOutputMode == AudioOutputMode.GameAndDiscord && GameCaptureSource != null)
                 {
                     voiceChatGroupIndex = trackGroups.Count;
                     trackGroups.Add(_voiceChatSources.Select(v => v.Source).ToList());
@@ -989,7 +973,7 @@ namespace Segra.Backend.Recorder
                 foreach (var device in Settings.Instance.InputDevices.Where(d => !string.IsNullOrEmpty(d.Id)))
                     audioDeviceNames.Add(device.Name.Replace(" (Default)", "") ?? "Microphone");
             }
-            if (audioOutputMode == AudioOutputMode.All || GameCaptureSource == null)
+            if (audioOutputMode == AudioOutputMode.All)
             {
                 if (Settings.Instance.OutputDevices != null)
                 {
@@ -999,8 +983,9 @@ namespace Segra.Backend.Recorder
             }
             else
             {
-                audioDeviceNames.Add("Game Audio");
-                if (audioOutputMode == AudioOutputMode.GameAndDiscord)
+                if (hasGameAudioGroup)
+                    audioDeviceNames.Add("Game Audio");
+                if (voiceChatGroupIndex >= 0)
                     audioDeviceNames.Add("Voice Chat");
             }
 
@@ -1339,25 +1324,47 @@ namespace Segra.Backend.Recorder
         }
 
         /// <summary>
-        /// Clamps b-frames to what the GPU's NVENC block supports for this codec, based on the
-        /// obs-nvenc-test probe result. OBS defaults to 2 b-frames regardless of hardware, and
-        /// support is per codec: the GTX 1650 (TU117) for example handles H.264 b-frames but not
-        /// HEVC b-frames, making every encode fail with "B-frames not supported on the current HW" (#151).
+        /// Applies the high-compression NVENC path only to HEVC+CQP; the user's CQP stays untouched.
         /// </summary>
-        private static void ApplyNvencBFrameLimit(ObsKit.NET.Core.Settings videoEncoderSettings, string encoderId)
+        private static bool ConfigureVideoEncoderQuality(ObsKit.NET.Core.Settings settings, string encoderId, string rateControl, bool hdr)
+        {
+            bool isNvenc = encoderId.Contains("nvenc", StringComparison.OrdinalIgnoreCase);
+            bool optimize = isNvenc && IsHevcEncoder(encoderId) && rateControl.Equals("CQP", StringComparison.OrdinalIgnoreCase);
+            string preset = optimize ? "p7" : "p5";
+
+            settings.Set("preset", isNvenc ? preset : "Quality");
+            settings.Set("preset2", preset); // OBS's legacy jim_* NVENC compatibility encoder reads this key.
+            settings.Set("profile", IsHevcEncoder(encoderId) ? (hdr ? "main10" : "main") : "high");
+            settings.Set("keyint_sec", optimize ? 5 : 1);
+            settings.Set("tune", "hq");
+            settings.Set("multipass", optimize ? "fullres" : "qres");
+            settings.Set("lookahead", optimize);
+            settings.Set("adaptive_quantization", true);
+            settings.Set("psycho_aq", true); // Legacy jim_* key; migrated to adaptive_quantization by OBS.
+
+            if (optimize)
+                Log.Information("NVENC HEVC CQP storage optimization: P7, HQ, full-res two-pass, lookahead/AQ, 5s GOP");
+            return optimize;
+        }
+
+        /// <summary>
+        /// Clamps b-frames to the obs-nvenc-test result. The optimized HEVC+CQP path uses the
+        /// supported maximum; other NVENC paths preserve OBS's normal maximum of two.
+        /// </summary>
+        private static void ApplyNvencBFrameLimit(ObsKit.NET.Core.Settings videoEncoderSettings, string encoderId, bool maximizeCompression)
         {
             int? maxBFrames = NvencCapsService.GetMaxBFrames(encoderId);
             if (maxBFrames == null)
                 return;
 
-            int bf = Math.Min(2, maxBFrames.Value);
+            int bf = maximizeCompression ? maxBFrames.Value : Math.Min(2, maxBFrames.Value);
             videoEncoderSettings.Set("bf", bf);
-            if (bf < 2)
-                Log.Information($"NVENC b-frames limited to {bf} ({encoderId} supports max {maxBFrames} on this GPU)");
+            Log.Information($"NVENC b-frames set to {bf} ({encoderId} supports max {maxBFrames} on this GPU)");
         }
 
         private static bool IsHevcEncoder(string encoderId) =>
-            HdrHevcEncoders.Contains(encoderId, StringComparer.OrdinalIgnoreCase);
+            HdrHevcEncoders.Contains(encoderId, StringComparer.OrdinalIgnoreCase) ||
+            (encoderId.Contains("nvenc", StringComparison.OrdinalIgnoreCase) && encoderId.Contains("hevc", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsHdrCapableEncoder(string encoderId) =>
             HdrHevcEncoders.Contains(encoderId, StringComparer.OrdinalIgnoreCase) ||
@@ -1690,35 +1697,8 @@ namespace Segra.Backend.Recorder
                 // Remove display capture to save resources while game is hooked
                 DisposeDisplaySource();
 
-                // Switch output audio: normal games mute desktop fallback; known-bad games keep it for Game Audio.
-                var audioOutputMode = Settings.Instance.AudioOutputMode;
-                if (audioOutputMode != AudioOutputMode.All)
-                {
-                    if (_forceDesktopGameAudioFallback)
-                    {
-                        foreach (var desktopSource in _desktopSources)
-                        {
-                            try { desktopSource.IsMuted = false; }
-                            catch (Exception ex) { Log.Warning($"Failed to keep desktop source unmuted: {ex.Message}"); }
-                        }
-                        Log.Information("Keeping desktop audio sources unmuted (selected output-device fallback for Game Audio)");
-                    }
-                    else
-                    {
-                        foreach (var desktopSource in _desktopSources)
-                        {
-                            try { desktopSource.IsMuted = true; }
-                            catch (Exception ex) { Log.Warning($"Failed to mute desktop source: {ex.Message}"); }
-                        }
-                        Log.Information("Muted desktop audio sources (game hooked, using capture_audio)");
-                    }
-
-                    foreach (var (voiceName, _, voiceSource) in _voiceChatSources)
-                    {
-                        try { voiceSource.IsMuted = false; Log.Information($"Unmuted {voiceName} audio source (game hooked)"); }
-                        catch (Exception ex) { Log.Warning($"Failed to unmute {voiceName} source: {ex.Message}"); }
-                    }
-                }
+                // Hooked is OBS's confirmation that injection succeeded; only now disable fallback audio.
+                ApplyGameInjectionAudioState(injected: true);
 
                 if (AppState.Instance.Recording != null)
                 {
@@ -1741,23 +1721,29 @@ namespace Segra.Backend.Recorder
             // IsHooked is now managed by GameCapture automatically
             Log.Information("Game unhooked.");
 
-            // Switch output audio back: unmute desktop sources and mute voice chat sources
-            var audioOutputMode = Settings.Instance.AudioOutputMode;
-            if (audioOutputMode != AudioOutputMode.All)
-            {
-                foreach (var desktopSource in _desktopSources)
-                {
-                    try { desktopSource.IsMuted = false; }
-                    catch (Exception ex) { Log.Warning($"Failed to unmute desktop source: {ex.Message}"); }
-                }
-                Log.Information("Unmuted desktop audio sources (game unhooked, falling back to desktop audio)");
+            ApplyGameInjectionAudioState(injected: false);
+        }
 
-                foreach (var (voiceName, _, voiceSource) in _voiceChatSources)
-                {
-                    try { voiceSource.IsMuted = true; Log.Information($"Muted {voiceName} audio source (game unhooked)"); }
-                    catch (Exception ex) { Log.Warning($"Failed to mute {voiceName} source: {ex.Message}"); }
-                }
+        private static void ApplyGameInjectionAudioState(bool injected)
+        {
+            if (Settings.Instance.AudioOutputMode == AudioOutputMode.All)
+                return;
+
+            foreach (var desktopSource in _desktopSources)
+            {
+                try { desktopSource.IsMuted = injected; }
+                catch (Exception ex) { Log.Warning($"Failed to set output-device fallback mute state: {ex.Message}"); }
             }
+
+            foreach (var (voiceName, _, voiceSource) in _voiceChatSources)
+            {
+                try { voiceSource.IsMuted = !injected; }
+                catch (Exception ex) { Log.Warning($"Failed to set {voiceName} mute state: {ex.Message}"); }
+            }
+
+            Log.Information(injected
+                ? "Game injection succeeded; using capture_audio and muting output-device fallback"
+                : "Game injection unavailable; using selected output device(s) for Game Audio");
         }
 
         private static void OnReplaySaved(nint calldata)
@@ -2099,7 +2085,6 @@ namespace Segra.Backend.Recorder
                 }
             }
             _voiceChatSources.Clear();
-            _forceDesktopGameAudioFallback = false;
         }
 
         public static void DisposeGameCaptureSource()
