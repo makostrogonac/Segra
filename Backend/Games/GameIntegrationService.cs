@@ -11,6 +11,7 @@ using Segra.Backend.Games.RunescapeDragonwilds;
 #if WINDOWS
 using Segra.Backend.Games.RocketLeague;
 using Segra.Backend.Games.GrandTheftAuto;
+using Segra.Backend.Games.Fortnite;
 #endif
 
 namespace Segra.Backend.Games
@@ -21,6 +22,7 @@ namespace Segra.Backend.Games
         private const int LOL_IGDB_ID = 115;
         private const int CS2_IGDB_ID = 242408;
         private const int ROCKET_LEAGUE_IGDB_ID = 11198;
+        private const int FORTNITE_IGDB_ID = 1905;
         private const int DOTA2_IGDB_ID = 2963;
         private const int RUST_IGDB_ID = 3277;
         private const int MINECRAFT_IGDB_ID = 135400;
@@ -57,6 +59,10 @@ namespace Segra.Backend.Games
 #if WINDOWS
                 else if ((igdbId == ROCKET_LEAGUE_IGDB_ID || gameName?.Equals("Rocket League", StringComparison.OrdinalIgnoreCase) == true) && integrations.RocketLeague.Enabled)
                     _gameIntegration = new RocketLeagueIntegration();
+                else if ((igdbId == FORTNITE_IGDB_ID || gameName?.Equals("Fortnite", StringComparison.OrdinalIgnoreCase) == true
+                          || Path.GetFileName(exePath)?.StartsWith("FortniteClient-Win64-Shipping", StringComparison.OrdinalIgnoreCase) == true)
+                         && integrations.Fortnite.Enabled)
+                    _gameIntegration = new FortniteIntegration();
 #endif
                 else if ((igdbId == DOTA2_IGDB_ID || gameName?.Equals("Dota 2", StringComparison.OrdinalIgnoreCase) == true) && integrations.Dota2.Enabled)
                     _gameIntegration = new Dota2Integration();

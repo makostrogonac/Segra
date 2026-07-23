@@ -5,6 +5,7 @@ using System.Drawing.Imaging;
 using global::Windows.Media.Ocr;
 using Segra.Backend.Core.Models;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using global::Windows.Graphics.Imaging;
 
 namespace Segra.Backend.Games
@@ -20,6 +21,8 @@ namespace Segra.Backend.Games
         private readonly OcrConfig _config;
         private readonly Dictionary<BookmarkType, DateTime> _lastEventTime;
         private readonly Dictionary<BookmarkType, PendingEvent> _pendingEvents = new();
+        private readonly HashSet<string> _visibleKeywords = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, int> _keywordMissFrames = new(StringComparer.OrdinalIgnoreCase);
 
         private readonly record struct PendingEvent(
             string Keyword,
@@ -45,6 +48,7 @@ namespace Segra.Backend.Games
         {
             public required string Text { get; init; }
             public required BookmarkType BookmarkType { get; init; }
+            public bool ExactMatch { get; init; }
             public IReadOnlyList<string> ExcludeFragments { get; init; } = [];
         }
 
@@ -198,19 +202,28 @@ namespace Segra.Backend.Games
             using (softwareBitmap)
             {
                 var result = await _ocrEngine.RecognizeAsync(softwareBitmap);
-                var text = result.Text;
+                var text = result.Text?.ReplaceLineEndings(" ");
 
                 // Process pending events even when OCR text is empty
                 ProcessPendingEvents(text ?? "");
 
                 if (string.IsNullOrWhiteSpace(text))
+                {
+                    UpdateKeywordVisibility([]);
                     return;
+                }
 
                 Log.Debug($"[{_config.LogPrefix}] OCR text: {text}");
 
-                foreach (var keyword in _config.Keywords)
+                var matchedKeywords = _config.Keywords
+                    .Where(keyword => keyword.ExactMatch
+                        ? Regex.IsMatch(text, $@"\b{Regex.Escape(keyword.Text)}\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)
+                        : FuzzyContains(text, keyword.Text))
+                    .ToList();
+
+                foreach (var keyword in matchedKeywords)
                 {
-                    if (!FuzzyContains(text, keyword.Text))
+                    if (_visibleKeywords.Contains(keyword.Text))
                         continue;
 
                     var now = DateTime.UtcNow;
@@ -239,6 +252,32 @@ namespace Segra.Backend.Games
                         Log.Information($"[{_config.LogPrefix}] Detected '{keyword.Text}' in OCR text -> {keyword.BookmarkType}");
                     }
                     break;
+                }
+
+                UpdateKeywordVisibility(matchedKeywords.Select(keyword => keyword.Text));
+            }
+        }
+
+        private void UpdateKeywordVisibility(IEnumerable<string> visibleNow)
+        {
+            var visible = visibleNow.ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (string keyword in visible)
+            {
+                _visibleKeywords.Add(keyword);
+                _keywordMissFrames[keyword] = 0;
+            }
+
+            foreach (string keyword in _visibleKeywords.Except(visible).ToList())
+            {
+                int misses = _keywordMissFrames.GetValueOrDefault(keyword) + 1;
+                if (misses >= 3)
+                {
+                    _visibleKeywords.Remove(keyword);
+                    _keywordMissFrames.Remove(keyword);
+                }
+                else
+                {
+                    _keywordMissFrames[keyword] = misses;
                 }
             }
         }

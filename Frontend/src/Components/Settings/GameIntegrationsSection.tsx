@@ -16,6 +16,15 @@ interface GameIntegration {
 
 const GAME_INTEGRATIONS: GameIntegration[] = [
   {
+    id: 'fortnite',
+    name: 'Fortnite',
+    settingsKey: 'fortnite',
+    bookmarks: ['Kills', 'Deaths'],
+    backgroundImage: 'https://segra.tv/api/games/cover/coc8ds',
+    isBeta: true,
+    warningText: 'Requires the English Fortnite HUD.',
+  },
+  {
     id: 'cs2',
     name: 'Counter-Strike 2',
     settingsKey: 'counterStrike2',
