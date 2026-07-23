@@ -173,6 +173,9 @@ DocProject/Help/html
 # Click-Once directory
 publish/
 
+# Velopack packaging output (build-local.sh / vpk pack)
+output/
+
 # Publish Web Output
 *.[Pp]ublish.xml
 *.azurePubxml
@@ -357,4 +360,6 @@ MigrationBackup/
 .vscode/extensions.json
 .DS_Store
 /Resources/FFmpeg/ffmpeg.exe
+/Resources/wwwroot/*
+!/Resources/wwwroot/.gitkeep
 .playwright-mcp/

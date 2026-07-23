@@ -181,10 +181,10 @@ namespace Segra.Backend.Media
 
                     if (!anyBurned)
                     {
-                        _ = MessageService.ShowModal(
-                            "Input overlay not burned",
-                            "No captured input data was found for this recording, so the overlay could not be burned in. Recordings made with this overlay version capture inputs automatically.",
-                            "warning");
+                        string reason = OperatingSystem.IsWindows()
+                            ? "No captured input data was found for this recording, so the overlay could not be burned in. Recordings made with this overlay version capture inputs automatically."
+                            : "Input overlay capture and burn-in are currently Windows-only.";
+                        _ = MessageService.ShowModal("Input overlay not burned", reason, "warning");
                     }
                 }
 

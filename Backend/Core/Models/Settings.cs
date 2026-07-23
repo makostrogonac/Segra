@@ -1,6 +1,7 @@
 using Serilog;
 using Segra.Backend.App;
 using Segra.Backend.Core;
+using Segra.Backend.Platform;
 using System.Text.Json.Serialization;
 
 namespace Segra.Backend.Core.Models
@@ -44,12 +45,14 @@ namespace Segra.Backend.Core.Models
         private bool _forceMonoInputSources = false;
         private Display? _selectedDisplay = null;
         private DisplayCaptureMethod _displayCaptureMethod = DisplayCaptureMethod.Auto;
+        private WindowState? _lastWindowState = null;
         private bool _enableAi = true;
         private bool _autoGenerateHighlights = true;
         private double _highlightPaddingBefore = 4;
         private double _highlightPaddingAfter = 4;
         private bool _runOnStartup = false;
         private StartupWindowMode _startupWindowMode = StartupWindowMode.Minimized;
+        private CloseButtonAction _closeButtonAction = CloseButtonAction.Minimize;
         private bool _receiveBetaUpdates = false;
         private string _updateRepository = string.Empty;
         private bool _airplaneMode = false;
@@ -130,11 +133,11 @@ namespace Segra.Backend.Core.Models
         private void SetDefaultResolution()
         {
             int screenHeight = 1080; // Fallback value
-            var primaryScreen = Screen.PrimaryScreen;
 
-            if (primaryScreen != null)
+            if (PlatformServices.Display != null &&
+                PlatformServices.Display.GetPrimaryMonitorPhysicalResolution(out _, out uint height) && height > 0)
             {
-                screenHeight = primaryScreen.Bounds.Height;
+                screenHeight = (int)height;
             }
 
             if (screenHeight >= 2160)
@@ -373,6 +376,17 @@ namespace Segra.Backend.Core.Models
             }
         }
 
+        // Last known main-window position, restored on next launch. Backend-only.
+        [JsonPropertyName("lastWindowState")]
+        public WindowState? LastWindowState
+        {
+            get => _lastWindowState;
+            set
+            {
+                _lastWindowState = value;
+            }
+        }
+
         [JsonPropertyName("enableAi")]
         public bool EnableAi
         {
@@ -444,7 +458,7 @@ namespace Segra.Backend.Core.Models
                 if (_runOnStartup != value)
                 {
                     _runOnStartup = value;
-                    StartupService.SetStartupStatus(value);
+                    PlatformServices.Startup.SetStartupStatus(value);
                 }
             }
         }
@@ -459,6 +473,19 @@ namespace Segra.Backend.Core.Models
                 if (_startupWindowMode != value)
                 {
                     _startupWindowMode = value;
+                }
+            }
+        }
+
+        [JsonPropertyName("closeButtonAction")]
+        public CloseButtonAction CloseButtonAction
+        {
+            get => _closeButtonAction;
+            set
+            {
+                if (_closeButtonAction != value)
+                {
+                    _closeButtonAction = value;
                 }
             }
         }
@@ -1250,6 +1277,13 @@ namespace Segra.Backend.Core.Models
     }
 
     [JsonConverter(typeof(JsonStringEnumConverter))]
+    public enum CloseButtonAction
+    {
+        Minimize,
+        Exit
+    }
+
+    [JsonConverter(typeof(JsonStringEnumConverter))]
     public enum DisplayCaptureMethod
     {
         Auto,
@@ -1335,6 +1369,14 @@ namespace Segra.Backend.Core.Models
 
         [JsonPropertyName("discardSessionsWithoutBookmarksOverride")]
         public bool? DiscardSessionsWithoutBookmarksOverride { get; set; }
+
+        [JsonPropertyName("enableHdrOverride")]
+        public bool? EnableHdrOverride { get; set; }
+
+        // Multiplier applied on top of the configured device volume for this game's captured
+        // audio (desktop/game capture), independent of the player's own in-game/OS volume.
+        [JsonPropertyName("volumeOverride")]
+        public float? VolumeOverride { get; set; }
     }
 
     // Mirrors the global video quality settings. When Preset is "low"/"standard"/"high" the concrete

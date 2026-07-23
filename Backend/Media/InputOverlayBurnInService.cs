@@ -21,6 +21,12 @@ public static class InputOverlayBurnInService
         Action<double>? progress,
         Action<Process>? onProcessStarted)
     {
+        if (!OperatingSystem.IsWindows())
+        {
+            Log.Warning("InputOverlay burn-in is currently Windows-only");
+            return false;
+        }
+
         var samples = InputOverlayRenderer.ParseInputs(inputsJsonPath);
         if (samples.Count == 0)
         {

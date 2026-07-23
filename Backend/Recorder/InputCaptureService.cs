@@ -79,28 +79,33 @@ internal static class InputCaptureService
 
     public static double ElapsedMs => _stopwatch?.Elapsed.TotalMilliseconds ?? 0d;
 
-    // Slice the in-memory ring for a saved replay's [end-duration, end] window and write
+    // Snapshot at save request time: slow/network replay muxes can finish after the rolling ring
+    // has advanced or recording teardown has cleared it.
+    public static IReadOnlyList<(double t, string line)> SnapshotRing()
+    {
+        lock (_ringLock)
+            return _ring.ToArray();
+    }
+
+    // Slice a save-time snapshot for a replay's [end-duration, end] window and write
     // {replay}.inputs.json next to it, rebasing t so the window start aligns with the
     // replay's first frame. Residual drift is covered by the overlay's syncOffsetMs knob.
-    public static bool SliceAndSave(string replayFilePath, double windowEndMs, double windowDurationMs)
+    public static bool SliceAndSave(string replayFilePath, double windowEndMs, double windowDurationMs, IReadOnlyList<(double t, string line)> samples)
     {
         if (windowDurationMs <= 0) return false;
         double start = windowEndMs - windowDurationMs;
 
         var sb = new StringBuilder();
         int count = 0;
-        lock (_ringLock)
+        foreach (var (t, line) in samples)
         {
-            foreach (var (t, line) in _ring)
-            {
-                if (t < start) continue;
-                if (t > windowEndMs) break;
-                int comma = line.IndexOf(',');
-                if (comma <= 0) continue;
-                sb.Append("{\"t\":").Append((t - start).ToString("0.##", CultureInfo.InvariantCulture));
-                sb.Append(line, comma, line.Length - comma);
-                count++;
-            }
+            if (t < start) continue;
+            if (t > windowEndMs) break;
+            int comma = line.IndexOf(',');
+            if (comma <= 0) continue;
+            sb.Append("{\"t\":").Append((t - start).ToString("0.##", CultureInfo.InvariantCulture));
+            sb.Append(line, comma, line.Length - comma);
+            count++;
         }
 
         if (count == 0)

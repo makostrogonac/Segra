@@ -435,6 +435,8 @@ export default function VideoComponent({ video }: { video: Content }) {
   );
   const [resizingSegmentId, setResizingSegmentId] = useState<number | null>(null);
   const [resizeDirection, setResizeDirection] = useState<'start' | 'end' | null>(null);
+  // Read at resize-end (the mouseup handler's effect doesn't depend on the state).
+  const resizeDirectionRef = useRef<'start' | 'end' | null>(null);
   const resizeCandidateRef = useRef<{
     id: number;
     direction: 'start' | 'end';
@@ -463,6 +465,10 @@ export default function VideoComponent({ video }: { video: Content }) {
     () => [...segments].sort((a, b) => a.startTime - b.startTime),
     [segments],
   );
+  const totalSegmentsDuration = useMemo(
+    () => segments.reduce((sum, s) => sum + Math.max(0, s.endTime - s.startTime), 0),
+    [segments],
+  );
   const segmentsRef = useRef(segments);
   useEffect(() => {
     segmentsRef.current = segments;
@@ -477,8 +483,9 @@ export default function VideoComponent({ video }: { video: Content }) {
     // Read the latest segment from state (may be undefined immediately after add)
     const current = segmentsRef.current.find((s) => s.id === id);
 
-    // Mark loading on latest state if present (new segment already has isLoading=true)
-    if (current) {
+    // Only show the loading spinner for the first fetch. When a thumbnail
+    // already exists, keep it visible and let the card crossfade to the new one.
+    if (current && !current.thumbnailDataUrl) {
       updateSegment({ ...current, isLoading: true });
     }
 
@@ -1146,6 +1153,26 @@ export default function VideoComponent({ video }: { video: Content }) {
     return { majorTicks, minorTicks };
   }, [duration, pixelsPerSecond]);
 
+  // Grab the frame currently shown in the <video> as an instant thumbnail.
+  // Returns undefined if the frame isn't ready or the canvas would be tainted.
+  const captureCurrentFrame = (): string | undefined => {
+    const v = videoRef.current;
+    if (!v || !v.videoWidth || !v.videoHeight || v.readyState < 2) return undefined;
+    try {
+      const targetWidth = 480;
+      const scale = Math.min(1, targetWidth / v.videoWidth);
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(v.videoWidth * scale);
+      canvas.height = Math.round(v.videoHeight * scale);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return undefined;
+      ctx.drawImage(v, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg', 0.7);
+    } catch {
+      return undefined;
+    }
+  };
+
   // Add a new segment at the current video position
   const handleAddSegment = async () => {
     if (!videoRef.current) return;
@@ -1155,13 +1182,17 @@ export default function VideoComponent({ video }: { video: Content }) {
     const segmentDuration = Math.min(120, Math.max(6, visibleDuration * 0.1));
     const end = Math.min(start + segmentDuration, duration);
 
+    // Use the frame already on screen as an instant thumbnail; the server
+    // thumbnail crossfades in once fetched.
+    const instantThumbnail = captureCurrentFrame();
+
     const newSegment: Segment = {
       id: Date.now(),
       type: video.type,
       startTime: start,
       endTime: end,
-      thumbnailDataUrl: undefined,
-      isLoading: true,
+      thumbnailDataUrl: instantThumbnail,
+      isLoading: !instantThumbnail,
       fileName: video.fileName,
       filePath: video.filePath,
       game: video.game,
@@ -1175,8 +1206,12 @@ export default function VideoComponent({ video }: { video: Content }) {
             : undefined,
     };
     addSegment(newSegment);
-    // Kick off thumbnail generation; uses latest state and guards against stale overwrites
-    refreshSegmentThumbnail(newSegment);
+    // The instant frame capture is good enough for the initial thumbnail, so
+    // only fall back to ffmpeg generation if the capture failed. Later moves
+    // and resizes regenerate via ffmpeg as usual.
+    if (!instantThumbnail) {
+      refreshSegmentThumbnail(newSegment);
+    }
   };
 
   // Create a clip from current segments
@@ -1210,6 +1245,9 @@ export default function VideoComponent({ video }: { video: Content }) {
 
   const handleSegmentDrag = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!scrollContainerRef.current) return;
+    // Grabbing a resize handle bubbles into the segment body and arms the drag
+    // candidate too; don't let a resize turn into a drag.
+    if (resizingSegmentId != null || resizeCandidateRef.current != null) return;
     if ((e.buttons & 1) !== 1 && dragState.id == null) return;
     const rect = scrollContainerRef.current.getBoundingClientRect();
     const dragPos = e.clientX - rect.left + scrollContainerRef.current.scrollLeft;
@@ -1411,6 +1449,7 @@ export default function VideoComponent({ video }: { video: Content }) {
       if (delta <= 3) return; // not enough movement
       setResizingSegmentId(cand.id);
       setResizeDirection(cand.direction);
+      resizeDirectionRef.current = cand.direction;
       setIsInteracting(true);
     }
 
@@ -1441,6 +1480,8 @@ export default function VideoComponent({ video }: { video: Content }) {
   };
 
   const handleSegmentResizeEnd = () => {
+    const direction = resizeDirectionRef.current;
+    resizeDirectionRef.current = null;
     setResizingSegmentId(null);
     setResizeDirection(null);
     resizeCandidateRef.current = null;
@@ -1448,7 +1489,10 @@ export default function VideoComponent({ video }: { video: Content }) {
     if (latestDraggedSegmentRef.current) {
       const seg = latestDraggedSegmentRef.current;
       latestDraggedSegmentRef.current = null;
-      void refreshSegmentThumbnail(seg);
+      // Thumbnail is the start frame, so only refresh when the start edge moved.
+      if (direction === 'start') {
+        void refreshSegmentThumbnail(seg);
+      }
     }
   };
 
@@ -1674,6 +1718,7 @@ export default function VideoComponent({ video }: { video: Content }) {
             <div className={videoWrapperClassName}>
               <video
                 autoPlay
+                crossOrigin="anonymous"
                 className="w-full h-full object-contain"
                 src={getVideoPath()}
                 ref={videoRef}
@@ -2413,6 +2458,16 @@ export default function VideoComponent({ video }: { video: Content }) {
                   }
                 />
               ))}
+              {clipOutputMode === 'combined' && segments.length > 0 && (
+                <div className="flex items-center justify-center pb-1">
+                  <span
+                    className="text-sm font-medium text-gray-300 opacity-50 tabular-nums"
+                    title="Total length of all segments"
+                  >
+                    {formatTime(totalSegmentsDuration)}
+                  </span>
+                </div>
+              )}
             </div>
             <div className="flex items-center justify-between my-3 mr-3">
               <label className="flex items-center cursor-pointer">

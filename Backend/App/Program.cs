@@ -6,20 +6,24 @@ using Segra.Backend.Api;
 using Photino.NET.Server;
 using Segra.Backend.Core;
 using System.Diagnostics;
+using System.Drawing;
 using Segra.Backend.Shared;
+using Segra.Backend.Platform;
 using Segra.Backend.Recorder;
 using Segra.Backend.Core.Models;
-using Segra.Backend.Windows.Input;
-using Segra.Backend.Windows.Power;
 using Segra.Backend.Windows.Storage;
+using System.Runtime.InteropServices;
+#if WINDOWS
+using Segra.Backend.Windows.Power;
 using Segra.Backend.Windows.GameMode;
 using Segra.Backend.Windows.WebView2;
-using System.Runtime.InteropServices;
+#endif
 
 namespace Segra.Backend.App
 {
     class Program
     {
+#if WINDOWS
         [DllImport("user32.dll")]
         static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 
@@ -35,6 +39,7 @@ namespace Segra.Backend.App
         const int SW_HIDE = 0;
         const int SM_CXFULLSCREEN = 16;
         const int SM_CYFULLSCREEN = 17;
+#endif
         public static bool IsFirstRun { get; private set; } = false;
         private static readonly AutoResetEvent ShowWindowEvent = new(false);
         public static bool hasLoadedInitialSettings = false;
@@ -53,8 +58,15 @@ namespace Segra.Backend.App
         [STAThread]
         static void Main(string[] args)
         {
+            PlatformServices.Initialize();
+
+#if WINDOWS
             // Set process DPI aware to ensure we capture at physical resolution
             SetProcessDPIAware();
+#else
+            // Re-exec once with LD_LIBRARY_PATH set so libobs is loadable (never returns on first launch).
+            Segra.Backend.Platform.Linux.LinuxObsRuntime.ConfigureAndReexecIfNeeded();
+#endif
 
             // Pin the working directory to the app directory so relative-path lookups
             // (OBS modules, bundled ffmpeg.exe) resolve regardless of how Segra was launched.
@@ -160,7 +172,9 @@ namespace Segra.Backend.App
             {
                 Log.Information("Application starting up...");
 
+#if WINDOWS
                 WebView2RuntimeService.LogRuntimeVersion();
+#endif
 
                 // VS Code sets SEGRA_VSCODE=1 via launch.json; Visual Studio does not.
                 // In VS Code the Vite dev server runs separately, so PhotinoServer is not needed
@@ -184,8 +198,13 @@ namespace Segra.Backend.App
                     {
                         var startInfo = new ProcessStartInfo
                         {
+#if WINDOWS
                             FileName = "cmd.exe",
                             Arguments = "/c npm run dev",
+#else
+                            FileName = "npm",
+                            Arguments = "run dev",
+#endif
                             WorkingDirectory = Path.Join(GetSolutionPath(), @"Frontend")
                         };
 
@@ -221,7 +240,7 @@ namespace Segra.Backend.App
                 if (IsFirstRun)
                 {
                     _ = SettingsService.LoadContentFromFolderIntoState(true);
-                    StartupService.SetStartupStatus(true);
+                    PlatformServices.Startup.SetStartupStatus(true);
                     Settings.Instance.DisableWindowsGameMode = true;
                     AppState.Instance.GpuVendor = GeneralUtils.DetectGpuVendor();
                     SettingsService.SelectDefaultDevices();
@@ -252,8 +271,12 @@ namespace Segra.Backend.App
                     Settings.Instance.StartupWindowMode == StartupWindowMode.Minimized;
                 Log.Information($"Starting application{(startMinimized ? " minimized from startup" : "")}");
 
-                AddNotifyIcon();
+                // Tray icon (WinForms NotifyIcon on Windows; no-op on Linux)
+                PlatformServices.Tray.Initialize(
+                    onOpen: () => _ = ShowApplicationWindow(),
+                    onExit: () => { Shutdown(); Environment.Exit(0); });
 
+#if WINDOWS
                 // Start monitoring system power state changes (sleep/wake)
                 Task.Run(PowerModeMonitor.StartMonitoring);
 
@@ -261,10 +284,14 @@ namespace Segra.Backend.App
                 Task.Run(GameModeService.EnforceDisabledIfEnabled);
 
                 // Run the OBS Initializer in a separate thread and application to make sure someting on the main thread doesn't block
+                // (KeybindCaptureService.Start() is called from OBSService.InitializeAsync once OBS is
+                // ready, since hotkeys register through OBS's own hotkey system.)
+                // OBSWindow hosts the Win32 message pump the graphics-hook game_capture needs.
                 Task.Run(() => Application.Run(new OBSWindow()));
-
-                // Global keybind hook (low-level keyboard hook + message loop) — runs for the lifetime of the app.
-                Task.Run(KeybindCaptureService.Start);
+#else
+                // Linux libobs runs headless (no message pump needed); initialize OBS directly.
+                Task.Run(() => OBSService.InitializeAsync());
+#endif
 
                 if (!startMinimized)
                 {
@@ -351,6 +378,8 @@ namespace Segra.Backend.App
         private static void Shutdown()
         {
             Log.Information("Application shutting down.");
+
+            SaveWindowState();
 
             // Stop any active recording first so OBS finalizes the file cleanly. Task.Run + block keeps
             // the awaits off the tray thread, whose WinForms SynchronizationContext would otherwise deadlock.
@@ -464,8 +493,10 @@ namespace Segra.Backend.App
         {
             Window?.SetMinimized(true);
 
+#if WINDOWS
             IntPtr hWnd = Process.GetCurrentProcess().MainWindowHandle;
             ShowWindow(hWnd, SW_HIDE); // Hides the window from the taskbar
+#endif
 
             Log.Information("Application window hidden");
         }
@@ -474,22 +505,44 @@ namespace Segra.Backend.App
         {
             Log.Information("Loading frontend, app url is " + appUrl);
 
+#if WINDOWS
             // Photino sizes windows in physical pixels, so scale the default size by the
             // OS display scale (e.g. 150% on 4K monitors) and clamp it to the usable screen area
             double displayScale = GetDpiForSystem() / 96.0;
             var windowSize = new Size(
                 Math.Min((int)(1280 * displayScale), GetSystemMetrics(SM_CXFULLSCREEN)),
                 Math.Min((int)(720 * displayScale), GetSystemMetrics(SM_CYFULLSCREEN)));
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico");
+#else
+            // WebKitGTK handles DPI scaling itself; use a sensible default size.
+            var windowSize = new Size(1280, 720);
+            string iconFile = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.png");
+#endif
+
+            bool hasRestoredLocation = TryGetRestoredWindowLocation(out Point restoredLocation);
 
             // Initialize the PhotinoWindow
-            Window = new PhotinoWindow()
-                .SetBrowserControlInitParameters("--enable-blink-features=AudioVideoTracks")
+            var windowBuilder = new PhotinoWindow();
+#if WINDOWS
+            // Chromium/WebView2-only flag; WebKitGTK on Linux parses this natively and crashes on the
+            // leading "--", so it must only be set on Windows.
+            windowBuilder = windowBuilder.SetBrowserControlInitParameters("--enable-blink-features=AudioVideoTracks");
+#endif
+            windowBuilder = windowBuilder
                 .SetNotificationsEnabled(false) // Disabled due to it creating a second start menu entry with incorrect start path. See https://github.com/tryphotino/photino.NET/issues/85
                 .SetUseOsDefaultSize(false)
-                .SetIconFile(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "icon.ico"))
+                .SetIconFile(iconFile)
                 .SetSize(windowSize)
-                .Center()
-                .SetResizable(true)
+                .SetResizable(true);
+
+            // Restore the window to the monitor it was last on instead of always centering on the primary display.
+            // UseOsDefaultLocation defaults to true, so it must be explicitly disabled or the native window
+            // ignores SetLocation and falls back to the OS default position (same reasoning as SetUseOsDefaultSize above).
+            windowBuilder = hasRestoredLocation
+                ? windowBuilder.SetUseOsDefaultLocation(false).SetLocation(restoredLocation)
+                : windowBuilder.Center();
+
+            Window = windowBuilder
                 .RegisterWebMessageReceivedHandler((sender, message) =>
                 {
                     Window = (PhotinoWindow)sender!;
@@ -504,11 +557,65 @@ namespace Segra.Backend.App
 
             Window.RegisterWindowClosingHandler((sender, eventArgs) =>
             {
+                if (Settings.Instance.CloseButtonAction == CloseButtonAction.Exit)
+                {
+                    Shutdown();
+                    Environment.Exit(0);
+                    return false;
+                }
+
+                SaveWindowState();
                 HideApplicationWindow();
                 return true;
             });
 
             Window.WaitForClose();
+        }
+
+        // Validates the saved location still lands on a currently connected monitor
+        // (e.g. the second monitor wasn't unplugged), falling back to centering otherwise.
+        private static bool TryGetRestoredWindowLocation(out Point location)
+        {
+            var saved = Settings.Instance.LastWindowState;
+            if (saved != null)
+            {
+                var savedLocation = new Point(saved.X, saved.Y);
+#if WINDOWS
+                // Only restore if the saved location still lands on a connected monitor.
+                if (Screen.AllScreens.Any(screen => screen.Bounds.Contains(savedLocation)))
+                {
+                    location = savedLocation;
+                    return true;
+                }
+#else
+                // No cross-platform multi-monitor bounds query; trust the saved location.
+                location = savedLocation;
+                return true;
+#endif
+            }
+
+            location = default;
+            return false;
+        }
+
+        private static void SaveWindowState()
+        {
+            if (Window == null || Window.Minimized) return;
+
+            try
+            {
+                Settings.Instance.LastWindowState = new WindowState
+                {
+                    X = Window.Location.X,
+                    Y = Window.Location.Y
+                };
+
+                SettingsService.SaveSettings();
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error saving window state");
+            }
         }
 
         private static void StartNamedPipeServer()
@@ -570,44 +677,6 @@ namespace Segra.Backend.App
         private static bool IsLaunchedFromStartup()
         {
             return Environment.GetCommandLineArgs().Contains("--from-startup");
-        }
-
-        private static void AddNotifyIcon()
-        {
-            var trayThread = new Thread(() =>
-            {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-
-                using (var icon = new NotifyIcon())
-                {
-                    icon.Icon = Properties.Resources.icon;
-                    icon.Text = "Segra";
-                    icon.Visible = true;
-
-                    var menu = new ContextMenuStrip();
-                    menu.Items.Add("Open", null, async (s, e) => await ShowApplicationWindow());
-                    menu.Items.Add("Exit", null, (s, e) =>
-                    {
-                        Shutdown();
-                        Environment.Exit(0);
-                    });
-                    icon.ContextMenuStrip = menu;
-
-                    icon.MouseDoubleClick += async (s, e) =>
-                    {
-                        if (e.Button == MouseButtons.Left)
-                            await ShowApplicationWindow();
-                    };
-
-                    NotifyIconService.Initialize(icon);
-
-                    Application.Run();
-                }
-            });
-            trayThread.SetApartmentState(ApartmentState.STA);
-            trayThread.IsBackground = true;
-            trayThread.Start();
         }
 
         private static string GetSolutionPath()
